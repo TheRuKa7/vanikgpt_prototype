@@ -1,0 +1,10 @@
+PO Number,PO-2026-0412
+Supplier,Shree Fasteners Pvt Ltd
+Supplier GSTIN,27AAPFU0939F1ZV
+Date,2026-09-12
+
+Item,HSN,Qty,Rate,Amount
+M12 hex bolt 50 mm,7318,5000,12.50,62500
+M12 hex nut,7318,5000,3.20,16000
+Spring washer 12 mm,7318,5000,0.90,4500
+Total,,,,83000

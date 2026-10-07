@@ -1,0 +1,49 @@
+// Router and sign-in. Routes: #/os/... is the Vanik OS console, #/gpt/... is the VanikGPT app.
+import { S, $, esc, chip, initials, LOGO, api, load, setRenderer, acts, applyTheme, ROLE, toast } from './core.js';
+import { osPage, osRouteChanged } from './os.js';
+import { gptPage, gptAfterRender, gptRouteChanged } from './gpt.js';
+import { platformPage, platformRouteChanged } from './platform.js';
+import { flowsPage, flowsRouteChanged } from './flows.js';
+
+let accounts = null, lastHash = '', busy = false, again = false;
+const home = () => (S.boot.admin ? '#/os/home' : '#/gpt');
+
+function signinPage() {
+  return `<div class="center-page"><div class="card"><div class="brand" style="padding:0 0 18px">${LOGO}<span>VANIK <em>OS</em></span></div>
+    <h2>Sign in</h2><p class="muted" style="margin:6px 0 18px">Pick an account. On your appliance this is your company single sign-on.</p>
+    <div class="stack" style="gap:8px">${accounts.map(a => `<button class="acct" data-act="signin" data-id="${a.id}"><span class="avatar">${esc(initials(a.name))}</span><span class="grow"><b>${esc(a.name)}</b><br><span class="small muted">${esc(a.email)}</span></span>${a.status === 'invited' ? chip('Invited', 'warn') : ''}${chip(ROLE[a.role], 'line', false)}</button>`).join('')}</div></div></div>`;
+}
+acts.signin = async el => {
+  await api('POST', '/api/signin', { userId: el.dataset.id });
+  S.userId = el.dataset.id; localStorage.setItem('vnk.user', S.userId); accounts = null;
+  await load(); location.hash = home();
+};
+
+async function render() {
+  if (busy) { again = true; return; }
+  busy = true;
+  try {
+    const root = $('#root'), hash = location.hash || '';
+    if (!S.userId) { if (!accounts) accounts = await api('GET', '/api/accounts'); root.innerHTML = signinPage(); return; }
+    if (!S.boot) await load();
+    const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    let html = null;
+    if (parts[0] === 'os') { html = platformPage(parts.slice(1)); if (html === undefined) html = osPage(parts.slice(1)); }
+    else if (parts[0] === 'gpt') html = parts[1] === 'flows' && S.boot.canUseGpt ? flowsPage(parts.slice(2)) : gptPage(parts.slice(1));
+    if (html === null) { location.replace(parts[0] === 'os' && !S.boot.admin ? '#/gpt' : home()); return; }
+    const sc = $('#scroll'), keep = hash === lastHash && sc ? sc.scrollTop : 0;
+    const moved = hash !== lastHash;
+    root.innerHTML = html; lastHash = hash;
+    if (moved) { root.classList.remove('fresh'); void root.offsetWidth; root.classList.add('fresh'); }
+    const ns = $('#scroll'); if (ns && keep) ns.scrollTop = keep;
+    gptAfterRender();
+  } catch (e) { if (S.userId) toast(e.message, 'err'); }
+  finally { busy = false; if (again) { again = false; render(); } }
+}
+setRenderer(render);
+addEventListener('hashchange', () => { accounts = S.userId ? accounts : null; osRouteChanged(); gptRouteChanged(); platformRouteChanged(); flowsRouteChanged(); render();
+  // keep shared state fresh as people move between pages
+  if (S.userId && S.boot) { const was = JSON.stringify(S.boot); load().then(() => { if (JSON.stringify(S.boot) !== was && !document.querySelector('.overlay')) render(); }).catch(() => {}); }
+});
+applyTheme();
+render();

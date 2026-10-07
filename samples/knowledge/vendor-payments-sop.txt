@@ -1,0 +1,11 @@
+Vendor payments SOP (sample)
+
+Payment runs happen every Tuesday and Friday. An invoice must be approved by 5 pm on the previous working day to be in the run.
+
+Vendor payments above 5 lakh rupees need approval from the finance controller. Payments above 25 lakh rupees also need approval from the CFO.
+
+Every invoice is matched against the purchase order and the goods receipt note before payment. A quantity difference of more than 1 percent sends the invoice to the exceptions queue.
+
+New vendors are paid only after their GST registration and bank account are verified. Bank account changes need a signed letter from the vendor and a call back to the registered phone number.
+
+Advance payments are limited to 30 percent of the purchase order value unless the contract says otherwise.

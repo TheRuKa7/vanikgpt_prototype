@@ -1,0 +1,4 @@
+Bank letter (sample)
+Account holder: Shree Fasteners Pvt Ltd
+IFSC: HDFC0001234
+Branch: Pune
