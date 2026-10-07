@@ -127,17 +127,19 @@ acts['user-menu'] = el => menu(el, [{ heading: S.boot.me.email || S.boot.me.name
 // ---------- "who can use this" picker. The page owns the draft object; the picker edits it in place.
 export const accessDrafts = {}, accessChanged = {};
 export function accessPicker(key, everyone = 'Everyone') {
-  const a = accessDrafts[key], B = S.boot, people = B.users.filter(u => u.role === 'user');
+  const a = accessDrafts[key], B = S.boot, people = B.users.filter(u => u.role === 'user'); a.deny = a.deny || [];
+  const block = !people.length ? '' : `<details class="adv" ${a.deny.length ? 'open' : ''}><summary class="small">Block someone ${a.deny.length ? `<span class="mono">${a.deny.length}</span>` : ''}</summary><div class="row wrap" style="gap:6px;margin-top:8px">${people.map(u => `<button class="tag ${a.deny.includes(u.id) ? 'on bad' : ''}" data-act="acc-deny" data-key="${key}" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div><p class="small faint" style="margin-top:8px">A blocked person is kept out even if their team is allowed.</p></details>`;
   const tags = a.mode !== 'restricted' ? '' : `
     ${B.teams.length ? `<div><div class="small faint" style="margin-bottom:6px">Teams</div><div class="row wrap" style="gap:6px">${B.teams.map(t => `<button class="tag ${a.teams.includes(t) ? 'on' : ''}" data-act="acc-team" data-key="${key}" data-v="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>` : ''}
     <div><div class="small faint" style="margin-bottom:6px">People</div>${people.length ? `<div class="row wrap" style="gap:6px">${people.map(u => `<button class="tag ${a.users.includes(u.id) ? 'on' : ''}" data-act="acc-user" data-key="${key}" data-v="${u.id}">${esc(u.name)}</button>`).join('')}</div>` : `<span class="small muted">No app users yet. <a class="link" href="#/os/people">Invite someone</a></span>`}</div>
     <p class="small faint">Owners and admins always have access.</p>`;
-  return `<div id="acc-${key}" class="stack" style="gap:12px"><div><div class="seg"><button class="${a.mode === 'everyone' ? 'on' : ''}" data-act="acc-mode" data-key="${key}" data-v="everyone">${esc(everyone)}</button><button class="${a.mode === 'restricted' ? 'on' : ''}" data-act="acc-mode" data-key="${key}" data-v="restricted">Chosen people</button></div></div>${tags}</div>`;
+  return `<div id="acc-${key}" class="stack" style="gap:12px"><div><div class="seg"><button class="${a.mode === 'everyone' ? 'on' : ''}" data-act="acc-mode" data-key="${key}" data-v="everyone">${esc(everyone)}</button><button class="${a.mode === 'restricted' ? 'on' : ''}" data-act="acc-mode" data-key="${key}" data-v="restricted">Chosen people</button></div></div>${tags}${block}</div>`;
 }
 const accRedraw = key => { const el = $('#acc-' + key); if (el) el.outerHTML = accessPicker(key, el.querySelector('.seg button').textContent); if (accessChanged[key]) accessChanged[key](); };
 const toggle = (list, v) => { const i = list.indexOf(v); if (i < 0) list.push(v); else list.splice(i, 1); };
 acts['acc-mode'] = el => { accessDrafts[el.dataset.key].mode = el.dataset.v; accRedraw(el.dataset.key); };
 acts['acc-team'] = el => { toggle(accessDrafts[el.dataset.key].teams, el.dataset.v); accRedraw(el.dataset.key); };
+acts['acc-deny'] = el => { toggle(accessDrafts[el.dataset.key].deny, el.dataset.v); accRedraw(el.dataset.key); };
 acts['acc-user'] = el => { toggle(accessDrafts[el.dataset.key].users, el.dataset.v); accRedraw(el.dataset.key); };
 export const accessLabel = a => !a || a.mode === 'everyone' ? 'Everyone' : (a.teams.length + a.users.length ? [a.teams.length ? a.teams.length + (a.teams.length === 1 ? ' team' : ' teams') : '', a.users.length ? a.users.length + (a.users.length === 1 ? ' person' : ' people') : ''].filter(Boolean).join(', ') : 'Admins only');
 
@@ -178,12 +180,14 @@ export async function extractFile(file, say = () => {}) {
     const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
     return { ...base, pages: wb.SheetNames.map(n => (wb.SheetNames.length > 1 ? `Sheet: ${n}\n` : '') + window.XLSX.utils.sheet_to_csv(wb.Sheets[n], { blankrows: false })), paged: false };
   }
-  if (!['txt', 'md', 'csv', 'html', 'htm', 'json', 'log', 'tsv'].includes(ext)) throw new Error(`"${file.name}" is not a supported type. Use PDF, Word, Excel, text, CSV, HTML or an image of a scan.`);
+  if (AUDIO.includes(ext)) return { ...base, pages: [], paged: false, audio: true };
+  if (!['txt', 'md', 'csv', 'html', 'htm', 'json', 'log', 'tsv', ...CODE].includes(ext)) throw new Error(`"${file.name}" is not a supported type. Use PDF, Word, Excel, text, code, CSV, HTML, an image of a scan or a recording.`);
   let text = await file.text();
   if (ext === 'html' || ext === 'htm') { const d = new DOMParser().parseFromString(text, 'text/html'); d.querySelectorAll('script,style').forEach(x => x.remove()); text = d.body.innerText || d.body.textContent || ''; }
   return { ...base, pages: [text], paged: false };
 }
-export const FILE_ACCEPT = '.pdf,.docx,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.log,.tsv,.png,.jpg,.jpeg,.webp,.bmp';
+const AUDIO = ['mp3', 'wav', 'm4a', 'ogg', 'aac', 'flac', 'webm'], CODE = ['sql', 'py', 'js', 'ts', 'java', 'go', 'rs', 'c', 'cpp', 'cs', 'sh', 'yaml', 'yml', 'xml', 'toml', 'ini', 'css'];
+export const FILE_ACCEPT = '.pdf,.docx,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.log,.tsv,.png,.jpg,.jpeg,.webp,.bmp,' + [...AUDIO, ...CODE].map(x => '.' + x).join(',');
 export function pickFiles(multiple = true) {
   return new Promise(ok => { const i = document.createElement('input'); i.type = 'file'; i.multiple = multiple; i.accept = FILE_ACCEPT; i.onchange = () => ok([...i.files]); i.click(); });
 }

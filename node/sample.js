@@ -247,6 +247,20 @@ Delivery of standard parts is within 7 working days. There is no penalty for del
 
 Liability of either side is capped at the value of orders in the previous 12 months.`,
 };
+DOC['po-export.sql'] = `-- Open purchase orders by supplier (sample). Run on the ERP reporting replica, never on the live database.
+SELECT po.po_number, s.name AS supplier, po.department, po.amount, po.status
+FROM purchase_orders po
+JOIN suppliers s ON s.id = po.supplier_id
+WHERE po.status IN ('Open', 'Goods received', 'Waiting for approval')
+  AND po.created_on >= DATE '2026-04-01'   -- this financial year
+ORDER BY po.amount DESC;
+-- Orders above 5 lakh rupees also need the finance controller: see the procurement policy.`;
+const CALL = `Call with Shree Fasteners, 29 September 2026 (sample transcript).
+Asha Verma: We received invoice INV-7802. The bolt rate is 13.40 but the purchase order says 12.50, and it bills 5,200 nuts where we ordered and received 5,000.
+Supplier: The 13.40 is the new list price from our October sheet. It was applied by mistake. The extra 200 nuts were a packing error on our side.
+Asha Verma: Under the agreement prices are fixed until 31 December 2026, so 12.50 stands. Please send a corrected invoice.
+Supplier: Agreed. We will withdraw INV-7802 and issue a corrected invoice for 83,000 plus GST by 6 October 2026.
+Asha Verma: Thank you. We will keep INV-7802 on hold until the corrected invoice arrives.`;
 const WF = {
   po: `PO Number,PO-2026-0412\nSupplier,Shree Fasteners Pvt Ltd\nSupplier GSTIN,27AAPFU0939F1ZV\nDate,2026-09-12\n\nItem,HSN,Qty,Rate,Amount\nM12 hex bolt 50 mm,7318,5000,12.50,62500\nM12 hex nut,7318,5000,3.20,16000\nSpring washer 12 mm,7318,5000,0.90,4500\nTotal,,,,83000\n`,
   grn: `GRN Number,GRN-5521\nPO Number,PO-2026-0412\nReceived on,2026-09-18\n\nItem,Received Qty\nM12 hex bolt 50 mm,5000\nM12 hex nut,5000\nSpring washer 12 mm,5000\n`,
@@ -257,7 +271,7 @@ const WF = {
   note: 'Delivery note DN-8841\nSupplier: Shree Fasteners Pvt Ltd\nSupplier GSTIN: 27AAPFU0939F1ZV\nPO Number: PO-2026-0412\nDate: 2026-09-18\nReceived in good condition by stores.\nTotal: 83000\n',
 };
 // The sample shared folder: what a mounted finance share would hold.
-const SHARE = { 'sample://finance-share': ['vendor-payments-sop.txt', 'procurement-policy.md', 'gst-quick-reference.md', 'open-purchase-orders.csv'] };
+const SHARE = { 'sample://finance-share': ['vendor-payments-sop.txt', 'procurement-policy.md', 'gst-quick-reference.md', 'open-purchase-orders.csv', 'po-export.sql'] };
 const shareFiles = p => (SHARE[p] || []).map(n => ({ name: n, text: DOC[n], mtime: 1 }));
 
 // ---------- the sample workspace
@@ -346,6 +360,24 @@ async function seed(x) {
       rules: [{ type: 'present', field: 'gstin', doc: 'note' }, { type: 'valid_ids' }, { type: 'same_value', field: 'po no' }, { type: 'totals_match', a: 'po', b: 'note', tolerance: 1 }, { type: 'phrase', doc: 'note', text: 'received in good condition', must: true }, { type: 'max_total', doc: 'note', amount: 500000 }] });
     await run(rohan, { type: 'custom:' + def.id, inputs: [{ role: 'po', name: 'purchase-order.csv', text: WF.po }, { role: 'note', name: 'delivery-note-DN-8841.txt', text: WF.note }] }, 1);
     await run(asha, { type: 'three_way', options: { tolerance: 1 }, inputs: [{ role: 'po', name: 'purchase-order.csv', text: WF.po }, { role: 'grn', name: 'goods-receipt.csv', text: WF.grn }, { role: 'invoice', name: 'invoice-INV-7802.csv', text: WF.invBad }] }, 0);
+    // more kinds of knowledge: a recording with its transcript, and a note someone kept from a chat
+    const rec = await call(owner, 'POST', `/api/collections/${legal.id}/documents`, { name: 'supplier-call-2026-09-29.m4a', type: 'm4a', audio: true, size: 2460000, purpose: 'Sample recording' });
+    await call(owner, 'POST', `/api/documents/${rec.id}/transcript`, { text: CALL });
+    await call(owner, 'POST', `/api/collections/${fin.id}/documents`, { name: 'dispute-log-oct.mp3', type: 'mp3', audio: true, size: 1310000, purpose: 'Sample recording' });
+    await call(owner, 'POST', `/api/collections/${fin.id}/notes`, { title: 'M12 hex bolt: list price and contract price', text: 'List price on the supplier portal is ₹12.50 a piece. Our contract price is ₹11.80, fixed until 31 December 2026. Lead time is 3 days. Order through the portal account buyer@example.com.', from: `https://${HOST}/account` });
+    // who may use what: the browser and the ERP are for the teams that buy and pay; finance can add to its own collection
+    const acc = (kind, id, access, part) => call(owner, 'PUT', '/api/access', { kind, id, access, part });
+    await acc('plugin', 'browser', { mode: 'restricted', teams: ['Procurement'], users: [] }); await acc('plugin', 'screen', { mode: 'restricted', teams: ['Procurement'], users: [] });
+    await acc('connector', erp.id, { mode: 'restricted', teams: ['Finance', 'Procurement'], users: [] });
+    await acc('collection', fin.id, { mode: 'restricted', teams: ['Finance'], users: [rohan.id] }, 'write');
+    await acc('collection', hr.id, { mode: 'restricted', teams: ['HR'], users: [] }, 'write');
+    // tasks and a finding passed to a colleague
+    const day = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10), wfBad = db.workflows[0];
+    await call(asha, 'POST', '/api/tasks', { title: 'Get the corrected invoice from Shree Fasteners for INV-7802', note: 'They agreed on the call to withdraw INV-7802 and send a corrected one for 83,000 plus GST by 6 October.', assignee: owner.id, due: day(3), source: { type: 'run', runId: wfBad.id, name: wfBad.title } });
+    await call(owner, 'POST', '/api/tasks', { title: 'Ask Shree Fasteners about the 2027 price revision', note: 'Prices are fixed until 31 December 2026. After that they can ask for a revision once a year, capped at 6 percent.', assignee: rohan.id, due: day(40), source: { type: 'doc', docId: db.documents.find(d => d.name === 'msa-shree-fasteners.md').id, name: 'msa-shree-fasteners.md' } });
+    await call(asha, 'POST', '/api/tasks', { kind: 'share', title: 'Our contract price for M12 bolts is ₹11.80, not ₹12.50', note: 'Found on the supplier portal under Contract prices. The last purchase order used the list price of ₹12.50. On 5,000 pieces that is ₹3,500 more than it should be.', assignee: owner.id, source: { type: 'web', name: 'Contract prices', url: `https://${HOST}/account` } });
+    const doneT = await call(owner, 'POST', '/api/tasks', { title: 'Submit the Pune travel claim within 15 days of returning', source: { type: 'doc', docId: db.documents.find(d => d.name === 'leave-and-travel-policy.md').id, name: 'leave-and-travel-policy.md' } });
+    await call(owner, 'PATCH', '/api/tasks/' + doneT.id, { status: 'done' });
     audit(owner, 'Loaded the sample workspace', 'Vanik OS', '3 collections, 4 agents, 4 chats, 5 workflow runs');
     db.sample = { at: new Date().toISOString(), hook: hook.id, erp: erp.id };
   } finally { state.pace = was; }

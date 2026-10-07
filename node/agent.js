@@ -341,6 +341,8 @@ module.exports = function install(ctx) {
         const hit = p.hit || (p.serverId && (() => { const m = db.mcp.find(x => x.id === p.serverId), t = m && m.tools.find(x => x.name === p.name); return m && t ? { m, t } : null; })());
         const args = p.parsed ? p.parsed.args : p.args, name = p.parsed ? p.parsed.name : p.name;
         if (!hit) { act({ id, kind: 'tool', tool: 'connector', label: 'Use ' + name, state: 'failed', result: 'No connector has a tool with that name.' }); res.stopped = `No connector has a tool called "${name}". Open Connectors in the + menu to see what is available.`; continue; }
+        const who = db.users.find(x => x.id === chat.userId);
+        if (who && !ctx.allowed(hit.m.access, who)) { act({ id, kind: 'tool', tool: 'connector', label: 'Use ' + name, state: 'failed', result: 'You do not have access to this connector.' }); res.stopped = `You do not have access to ${hit.m.name}. An admin decides who can use it.`; continue; }
         if (p.parsed && p.parsed.bad) { act({ id, kind: 'tool', tool: 'connector', label: 'Use ' + name, state: 'failed', result: p.parsed.bad }); res.stopped = p.parsed.bad; continue; }
         if (Array.isArray(chat.connectors) && !chat.connectors.includes(hit.m.id)) { act({ id, kind: 'tool', tool: 'connector', label: 'Use ' + name, state: 'failed', result: 'That connector is turned off for this chat.' }); res.stopped = 'That connector is turned off for this chat.'; continue; }
         const row = { id, kind: 'tool', tool: 'connector', label: `${hit.m.name}: ${hit.t.name}`, state: 'running' }; act(row);

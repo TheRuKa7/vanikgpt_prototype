@@ -51,6 +51,7 @@ export function gptShell(active, content) {
     <a class="nav-item ${active === 'flows' ? 'is-active' : ''}" href="#/gpt/flows">${icon('fact_check')}Workflows</a>
     <a class="nav-item ${active === 'assistants' ? 'is-active' : ''}" href="#/gpt/assistants">${icon('smart_toy')}Agents</a>
     <a class="nav-item ${active === 'knowledge' ? 'is-active' : ''}" href="#/gpt/knowledge">${icon('library_books')}Knowledge</a>
+    <a class="nav-item ${active === 'tasks' ? 'is-active' : ''}" href="#/gpt/tasks">${icon('task_alt')}<span class="grow">Tasks</span>${B.openTasks ? `<span class="count">${B.openTasks}</span>` : ''}</a>
     <div class="row" style="border-top:1px solid var(--vnk-border);padding-top:10px;margin-top:8px">${userButton()}<span class="right">${themeButton()}</span></div>
   </aside><div class="gpt-main">${content}</div></div>`;
 }
@@ -298,10 +299,12 @@ function msgHtml(m, last, readOnly) {
       <button class="icon-btn sm ${m.feedback === 'up' ? 'on' : ''}" data-act="msg-up" data-id="${m.id}" data-tip="Helpful" aria-label="Helpful">${icon('thumb_up_off_alt')}</button>
       <button class="icon-btn sm ${m.feedback === 'down' ? 'on' : ''}" data-act="msg-down" data-id="${m.id}" data-tip="Not helpful" aria-label="Not helpful">${icon('thumb_down_off_alt')}</button>
       <button class="icon-btn sm" data-act="msg-details" data-id="${m.id}" data-tip="How this answer was made" aria-label="How this answer was made">${icon('insights')}</button>
+      ${m.content ? `<button class="icon-btn sm" data-act="msg-more" data-id="${m.id}" data-tip="Keep, task or share" aria-label="Keep, task or share">${icon('more_horiz')}</button>` : ''}
       <span class="mono" style="margin-left:8px">${esc([m.mode === 'model' ? m.model || '' : m.mode === 'documents' ? 'documents only' : m.mode === 'tool' ? 'plugins' : m.mode === 'search' ? 'search only' : '', m.effort && m.effort !== 'balanced' ? m.effort : '', secs].filter(Boolean).join(' · '))}</span>
     </div>`}</div></div>`;
 }
 const findMsg = id => G.chat.messages.find(m => m.id === id);
+export const chatNow = () => G.chat;
 acts['msg-details'] = el => {
   const m = findMsg(el.dataset.id), b = m.budget, c = m.citations || [], VIA = { keyword: 'Keyword', meaning: 'Meaning', both: 'Keyword and meaning' };
   const parts = b ? [['Instructions', b.system, '#8a8b84'], ['Sources', b.passages, '#1fa350'], ['Earlier messages', b.history, '#3b6fd6'], ['Kept for the answer', b.output, '#c79a2b']] : [];
@@ -517,9 +520,9 @@ function pageKnowledge(id) {
     if (!c) return gptShell('knowledge', `<div class="scroll"><div class="page"><a class="back" href="#/gpt/knowledge">${icon('arrow_back')}Knowledge</a><div class="empty">You do not have this collection.</div></div></div>`);
     if (!G.colDocs[id]) { G.colDocs[id] = 'loading'; api('GET', `/api/collections/${id}/documents`).then(d => { G.colDocs[id] = d; rerender(); }).catch(e => toast(e.message, 'err')); }
     const docs = G.colDocs[id];
-    return gptShell('knowledge', `<div class="gpt-top">${navToggle()}<h3 class="grow ellipsis">${esc(c.name)}</h3>${manage}</div><div class="scroll" id="scroll"><div class="page"><a class="back" href="#/gpt/knowledge">${icon('arrow_back')}Knowledge</a>
+    return gptShell('knowledge', `<div class="gpt-top">${navToggle()}<h3 class="grow ellipsis">${esc(c.name)}</h3>${c.canWrite ? `<button class="btn ghost" data-act="kb-note">${icon('edit_note')}Add a note</button><button class="btn ghost" data-act="kb-add" data-id="${c.id}">${icon('upload_file')}Add files</button>` : ''}${manage}</div><div class="scroll" id="scroll"><div class="page"><a class="back" href="#/gpt/knowledge">${icon('arrow_back')}Knowledge</a>
       <p class="muted" style="margin-bottom:16px">${esc(c.description || '')}</p>
-      <div class="card">${!Array.isArray(docs) ? `<p class="muted">Loading…</p>` : docs.length ? `<table class="list"><tr><th>Document</th><th>Size</th><th>Added</th></tr>${docs.map(d => `<tr><td><a class="link" href="#/gpt/source/${d.id}/-/k">${esc(d.name)}</a></td><td class="muted">${bytes(d.size)}</td><td class="muted">${ago(d.uploadedAt)}</td></tr>`).join('')}</table>` : `<p class="muted">This collection has no documents yet.</p>`}</div></div></div>`);
+      <div class="card">${!Array.isArray(docs) ? `<p class="muted">Loading…</p>` : docs.length ? `<div id="uploads"></div><table class="list"><tr><th>Document</th><th>Size</th><th>Added</th><th></th></tr>${docs.map(d => `<tr><td>${d.waiting ? esc(d.name) : `<a class="link" href="#/gpt/source/${d.id}/-/k">${esc(d.name)}</a>`} ${d.note ? chip('Note', 'line') : d.waiting ? chip('Waiting for a transcript', 'warn') : d.transcribed ? chip('Recording', 'line') : ''}</td><td class="muted">${bytes(d.size)}</td><td class="muted">${ago(d.uploadedAt)}<div class="small faint">${esc(d.uploadedBy)}</div></td><td class="act">${d.waiting ? '' : `<button class="icon-btn sm tip-left" data-act="doc-tasks" data-id="${d.id}" data-name="${esc(d.name)}" data-tip="Make tasks from this" aria-label="Make tasks from this">${icon('add_task')}</button>`}</td></tr>`).join('')}</table>` : `<p class="muted">This collection has no documents yet.</p>`}</div></div></div>`);
   }
   G.colDocs = {};
   return gptShell('knowledge', `<div class="gpt-top">${navToggle()}<h3 class="grow">Knowledge ${info('The document collections VanikGPT can use for your answers.', 'tip-down')}</h3>${manage}</div>

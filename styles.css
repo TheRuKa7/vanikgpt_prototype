@@ -259,3 +259,12 @@ table.list tr:first-child th:last-child { text-align: right; }
 .replay .segs .done i::after, .replay .segs .now i::after { transform: none; } .replay .segs .now.run i::after { animation: seg 1.9s linear both; } @keyframes seg { from { transform: scaleX(0); } to { transform: none; } }
 .rule { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--vnk-border); } .rule:first-child { border-top: 0; padding-top: 0; } .rule .input { width: auto; min-width: 0; height: 34px; padding: 0 10px; } .rule input.input { flex: 1 1 140px; } .rule .n { width: 90px; flex: none; } .rule > span { white-space: nowrap; } .rule .icon-btn { margin-left: auto; }
 .card.add { border-style: dashed; background: none; box-shadow: none; align-items: flex-start; } .card.add:hover { border-color: var(--vnk-ink); }
+
+/* ---------- tasks, access */
+.task { display: flex; gap: 12px; align-items: flex-start; padding: 13px 0; border-top: 1px solid var(--vnk-border); } .card-head + .task, summary + div > .task:first-child { border-top: 0; padding-top: 2px; }
+.task .tick { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--vnk-border-2); display: grid; place-items: center; flex: none; margin-top: 1px; color: transparent; } .task .tick .mi { font-size: 14px; } .task .tick:hover { border-color: var(--vnk-ok); color: var(--vnk-ok); }
+.task.done .tick { background: var(--vnk-ok); border-color: var(--vnk-ok); color: #fff; } .task.done b { text-decoration: line-through; color: var(--vnk-ink-3); font-weight: 500; }
+.task .tnote { margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } .task .tag { text-decoration: none; } .task a.tag:hover { border-color: var(--vnk-ink); } .task .tag .mi { font-size: 14px; margin-right: 4px; }
+.gpt-nav .nav-item .count { font: 600 10.5px var(--mono); background: var(--vnk-accent); color: var(--vnk-accent-fg); border-radius: 999px; padding: 1px 7px; }
+details.card > summary { cursor: pointer; list-style: none; } details.card > summary::-webkit-details-marker { display: none; } details.adv > summary { cursor: pointer; color: var(--vnk-ink-2); }
+.tag.on.bad { background: var(--vnk-err); border-color: var(--vnk-err); color: #fff; }

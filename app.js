@@ -4,6 +4,7 @@ import { osPage, osRouteChanged } from './os.js';
 import { gptPage, gptAfterRender, gptRouteChanged } from './gpt.js';
 import { platformPage, platformRouteChanged } from './platform.js';
 import { flowsPage, flowsRouteChanged } from './flows.js';
+import { tasksPage, workOsPage, workRouteChanged } from './work.js';
 
 let accounts = null, lastHash = '', busy = false, again = false;
 const home = () => (S.boot.admin ? '#/os/home' : '#/gpt');
@@ -28,8 +29,8 @@ async function render() {
     if (!S.boot) await load();
     const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     let html = null;
-    if (parts[0] === 'os') { html = platformPage(parts.slice(1)); if (html === undefined) html = osPage(parts.slice(1)); }
-    else if (parts[0] === 'gpt') html = parts[1] === 'flows' && S.boot.canUseGpt ? flowsPage(parts.slice(2)) : gptPage(parts.slice(1));
+    if (parts[0] === 'os') { html = platformPage(parts.slice(1)); if (html === undefined) html = workOsPage(parts.slice(1)); if (html === undefined) html = osPage(parts.slice(1)); }
+    else if (parts[0] === 'gpt') html = parts[1] === 'flows' && S.boot.canUseGpt ? flowsPage(parts.slice(2)) : parts[1] === 'tasks' && S.boot.canUseGpt ? tasksPage() : gptPage(parts.slice(1));
     if (html === null) { location.replace(parts[0] === 'os' && !S.boot.admin ? '#/gpt' : home()); return; }
     const sc = $('#scroll'), keep = hash === lastHash && sc ? sc.scrollTop : 0;
     const moved = hash !== lastHash;
@@ -41,7 +42,7 @@ async function render() {
   finally { busy = false; if (again) { again = false; render(); } }
 }
 setRenderer(render);
-addEventListener('hashchange', () => { accounts = S.userId ? accounts : null; osRouteChanged(); gptRouteChanged(); platformRouteChanged(); flowsRouteChanged(); render();
+addEventListener('hashchange', () => { accounts = S.userId ? accounts : null; osRouteChanged(); gptRouteChanged(); platformRouteChanged(); flowsRouteChanged(); workRouteChanged(); render();
   // keep shared state fresh as people move between pages
   if (S.userId && S.boot) { const was = JSON.stringify(S.boot); load().then(() => { if (JSON.stringify(S.boot) !== was && !document.querySelector('.overlay')) render(); }).catch(() => {}); }
 });

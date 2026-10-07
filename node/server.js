@@ -19,8 +19,8 @@ const uid = p => p + '_' + crypto.randomBytes(5).toString('hex');
 const now = () => new Date().toISOString();
 const err = (status, message) => Object.assign(new Error(message), { status });
 const isAdmin = u => u.role === 'owner' || u.role === 'admin';
-const allowed = (acc, u) => isAdmin(u) || !acc || acc.mode === 'everyone' || (acc.users || []).includes(u.id) || (u.teams || []).some(t => (acc.teams || []).includes(t));
-const cleanAccess = a => (!a || a.mode !== 'restricted') ? { mode: 'everyone', teams: [], users: [] } : { mode: 'restricted', teams: [...new Set(a.teams || [])].map(String), users: [...new Set(a.users || [])].map(String) };
+const allowed = (acc, u) => isAdmin(u) || !acc || (!(acc.deny || []).includes(u.id) && (acc.mode === 'everyone' || (acc.users || []).includes(u.id) || (u.teams || []).some(t => (acc.teams || []).includes(t))));
+const cleanAccess = a => { const L = v => [...new Set(v || [])].map(String), deny = L(a && a.deny); return (!a || a.mode !== 'restricted') ? { mode: 'everyone', teams: [], users: [], ...(deny.length ? { deny } : {}) } : { mode: 'restricted', teams: L(a.teams), users: L(a.users), ...(deny.length ? { deny } : {}) }; };
 
 // ---------- state
 const defaultConfig = () => ({
@@ -56,6 +56,7 @@ for (const k of ['keys', 'webhooks', 'deliveries', 'connectors', 'workflows', 'p
 db.app.config.safety = { ...defaultConfig().safety, ...db.app.config.safety };
 db.app.config.tools = { ...defaultConfig().tools, ...(db.app.config.tools || {}) };
 const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
+const WK = { canWrite: () => false, openTasks: () => 0 };
 const SYSTEM = { id: 'system', name: 'Vanik OS', role: 'owner', teams: [] };
 const FX = { emit() {}, issueKey() {}, revokeSystemKeys() {}, pendingApprovals: () => 0, failedDeliveries: () => 0 };
 let saveT;
@@ -289,7 +290,7 @@ function startDeploy(u, note) {
 
 // ---------- views
 const collectionView = c => { const docs = db.documents.filter(d => d.collectionId === c.id); return { ...c, docCount: docs.length, bytes: docs.reduce((a, d) => a + d.size, 0), passages: docs.reduce((a, d) => a + d.chunks.length, 0), embedded: docs.reduce((a, d) => a + d.chunks.filter(k => k.v).length, 0) }; };
-const docView = d => ({ id: d.id, collectionId: d.collectionId, name: d.name, size: d.size, type: d.type, pages: d.pageCount, paged: d.paged, chunks: d.chunks.length, uploadedBy: d.uploadedBy, uploadedAt: d.uploadedAt, purpose: d.purpose || '', expiresOn: d.expiresOn || '', restrict: d.restrict || [], pii: d.pii || [], ocr: !!d.ocr, embedded: d.chunks.filter(c => c.v).length, synced: !!d.source });
+const docView = d => ({ id: d.id, collectionId: d.collectionId, name: d.name, size: d.size, type: d.type, pages: d.pageCount, paged: d.paged, chunks: d.chunks.length, uploadedBy: d.uploadedBy, uploadedAt: d.uploadedAt, purpose: d.purpose || '', expiresOn: d.expiresOn || '', restrict: d.restrict || [], pii: d.pii || [], ocr: !!d.ocr, embedded: d.chunks.filter(c => c.v).length, synced: !!d.source, waiting: !!d.waiting, note: !!d.note, transcribed: !!d.transcribed });
 const canUseGpt = u => db.app.status === 'running' && db.device.online && allowed(db.app.config.access, u);
 const gptCollections = u => { const sel = db.app.config.collections; return db.collections.filter(c => allowed(c.access, u) && (sel === 'all' || sel.includes(c.id))); };
 const canSeeAssistant = (u, a) => a.createdBy === u.id || (a.shared && allowed(a.access, u));
@@ -334,14 +335,14 @@ function bootstrap(u) {
       versions: admin ? a.versions.map(v => ({ v: v.v, at: v.at, by: v.by, note: v.note, config: v.config })) : [], deploys: admin ? a.deploys.slice(0, 30).map(deployView) : [], deploy: deployView(a.deploys[0]) },
     gateway: { configured: !!GW.url, ok: GW.ok, checkedAt: GW.checkedAt },
     canUseGpt: canUseGpt(u),
-    collections: (admin ? db.collections : db.collections.filter(c => allowed(c.access, u))).map(collectionView),
+    collections: (admin ? db.collections : db.collections.filter(c => allowed(c.access, u))).map(c => ({ ...collectionView(c), canWrite: WK.canWrite(u, c) })),
     gptCollectionIds: gptCollections(u).map(c => c.id),
     assistants: db.assistants.filter(x => canSeeAssistant(u, x)),
     chats: db.chats.filter(c => c.userId === u.id).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
-    plugins: AG.PLUGINS, toolConnectors: AG.mcpViews(), sample: !!db.sample,
+    plugins: admin ? AG.PLUGINS : AG.PLUGINS.filter(p => allowed(db.pluginAccess[p.id], u)), toolConnectors: AG.mcpViews().filter(m => admin || allowed((db.mcp.find(x => x.id === m.id) || {}).access, u)), sample: !!db.sample, openTasks: WK.openTasks(u),
     embeddingReady: !!(GW.ok && db.models.some(m => m.kind === 'embedding' && m.status === 'serving')),
   };
 }
@@ -384,6 +385,10 @@ setInterval(purge, 3600e3).unref(); purge();
 
 function addDocument(u, collectionId, b, quiet) {
   let pages = (Array.isArray(b.pages) ? b.pages : []).map(p => String(p || ''));
+  if (b.audio && b.name && !pages.join('').trim()) { // a recording with no transcript yet: kept, and searchable once it has one
+    const d = { id: uid('doc'), collectionId, name: String(b.name).slice(0, 200), size: +b.size || 0, type: String(b.type || 'audio').slice(0, 20), pageCount: 0, paged: false, chunks: [], uploadedBy: u.name, uploadedAt: now(), purpose: String(b.purpose || '').slice(0, 120), expiresOn: '', restrict: [], pii: [], ocr: false, waiting: true };
+    db.documents.push(d); return d;
+  }
   if (!b.name || !pages.join('').trim()) throw err(400, 'No readable text found in "' + (b.name || 'file') + '".');
   const found = new Set();
   if (db.app.config.safety.maskDocuments) pages = pages.map(p => { const r = scanPii(p, true); r.found.forEach(x => found.add(x)); return r.text; });
@@ -481,7 +486,7 @@ on('DELETE', '/api/collections/:id', ({ u, p }) => {
   audit(u, 'Deleted a collection', c.name); return { ok: true };
 }, A);
 on('GET', '/api/collections/:id/documents', ({ u, p }) => { const c = byId(db.collections, p.id, 'Collection'); if (!allowed(c.access, u)) throw err(403, 'You do not have access to this collection.'); return db.documents.filter(d => d.collectionId === c.id).map(docView); });
-on('POST', '/api/collections/:id/documents', ({ u, p, body }) => { const c = byId(db.collections, p.id, 'Collection'); const d = addDocument(u, c.id, body); c.updatedAt = now(); audit(u, 'Added a document', d.name, c.name); return docView(d); }, A);
+on('POST', '/api/collections/:id/documents', ({ u, p, body }) => { const c = byId(db.collections, p.id, 'Collection'); if (!WK.canWrite(u, c)) throw err(403, 'You cannot add to this collection. Ask an admin to let you.'); const d = addDocument(u, c.id, body); c.updatedAt = now(); audit(u, 'Added a document', d.name, c.name); return docView(d); });
 on('DELETE', '/api/documents/:id', ({ u, p }) => {
   const d = byId(db.documents, p.id, 'Document');
   if (d.collectionId.startsWith('chat:')) { const c = db.chats.find(x => 'chat:' + x.id === d.collectionId); if (!c || c.userId !== u.id) throw err(403, 'Not your file.'); }
@@ -698,7 +703,7 @@ async function answer(u, c, body, send, ctl, script) {
   if (topic) { msg.mode = 'blocked'; msg.notice = 'blocked_topic'; msg.model = null; audit(u, 'Blocked a question', topic, 'Matches a blocked topic'); return finish(); }
 
   // Plugins first: exact tools and the sandboxed browser.
-  const on = (cfg.tools.enabled || []).filter(t => (as ? (as.tools || []).includes(t) : !Array.isArray(c.plugins) || c.plugins.includes(t)));
+  const on = (cfg.tools.enabled || []).filter(t => (as ? (as.tools || []).includes(t) : !Array.isArray(c.plugins) || c.plugins.includes(t))).filter(t => allowed(db.pluginAccess[t], u));
   // Plugins work on the text as typed, on the device. In mask mode the IDs are shortened in everything that is stored or sent on.
   const shorten = cfg.safety.pii === 'mask' ? t => PII.reduce((x, [, re, check]) => x.replace(re, m => (check && !check(m)) || m.length < 8 || /^https?:/.test(m) ? m : m.slice(0, 2) + '…' + m.slice(-3)), String(t)) : null;
   const T = await AG.runTools(c, typed || userMsg.content, on, null, act, resume, shorten);
@@ -783,7 +788,8 @@ function readPage(question, snap) {
 }
 
 Object.assign(FX, require('./features')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM, addDocument, verhoeff, commandViews, probes, search, allowed, estTok, streamModel, passageAnswer }));
-Object.assign(AG, require('./agent')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
+Object.assign(AG, require('./agent')({ allowed, DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
+Object.assign(WK, require('./work')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, allowed, cleanAccess, addDocument, canReadDoc, plugins: () => AG.PLUGINS }));
 
 // The sample workspace is built through the same routes a person uses, once, when the server starts with --demo.
 const call = async (u, m, p, body) => { let match; const r = routes.find(x => x.m === m && (match = p.match(x.re))); if (!r) throw err(404, 'Not found: ' + p); return r.fn({ u, body: body || {}, p: match.groups || {}, q: new URLSearchParams(), req: { headers: {} }, res: { headersSent: false, setHeader() {}, writeHead() {}, end() {} } }); };

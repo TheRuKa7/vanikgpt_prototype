@@ -126,7 +126,7 @@ module.exports = function install(ctx) {
   on('POST', '/gateway/v1/embeddings', c => proxy('embeddings', c), { open: true });
 
   // ---------- folder connector: copies readable files from a folder on the appliance into a collection and keeps them in step
-  const TEXT_EXT = new Set(['.txt', '.md', '.csv', '.html', '.htm', '.json', '.log', '.tsv']);
+  const TEXT_EXT = new Set(['.txt', '.md', '.csv', '.html', '.htm', '.json', '.log', '.tsv', '.sql', '.py', '.js', '.ts', '.java', '.go', '.rs', '.c', '.cpp', '.cs', '.sh', '.yaml', '.yml', '.xml', '.toml', '.ini', '.css']);
   function listFiles(root) { const out = []; const walk = (d, n) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) { if (n > 0 && !e.name.startsWith('.')) walk(p, n - 1); } else out.push(p); } }; walk(root, 3); return out; }
   function syncConnector(c, by) {
     c.lastSyncAt = now(); c.error = '';
@@ -319,9 +319,10 @@ module.exports = function install(ctx) {
     return { key: def.id + '|' + sha(inputs.map(i => i.role + i.name + i.text).sort().join('|')).slice(0, 16), title: `${def.name}: ${(docs.find(d => d.invoiceNo) || {}).invoiceNo || (docs.find(d => d.poNo) || {}).poNo || inputs[0].name}`, needsApproval: def.approval === 'always' || (def.approval === 'fail' && bad > 0), amount, outcome: bad ? `${bad} ${bad === 1 ? 'rule' : 'rules'} not met` : 'All rules met',
       result: { kind: 'custom', summary: [['Workflow', def.name], ['Documents', inputs.map(i => i.name).join(', ')], ['Rules checked', String(def.rules.length)], ['Rules met', String(findings.length - bad - 0)], ['Highest total', amount ? money(amount) : 'None read']], findings }, events: [] };
   }
-  const typeView = t => ({ id: t.id, name: t.name, description: t.description, icon: t.icon, docs: t.docs, rules: t.rules, approval: t.approval, createdBy: t.createdBy, createdByName: t.createdByName, updatedAt: t.updatedAt });
+  const typeView = t => ({ id: t.id, name: t.name, description: t.description, icon: t.icon, docs: t.docs, rules: t.rules, approval: t.approval, access: t.access || null, createdBy: t.createdBy, createdByName: t.createdByName, updatedAt: t.updatedAt });
   const ownType = (u, id) => { const t = byId(db.flowTypes, id, 'Workflow'); if (!(isAdmin(u) || t.createdBy === u.id)) throw err(403, 'You can only change workflows you made.'); return t; };
-  on('GET', '/api/workflow-types', ({ u }) => { needGpt(u); return db.flowTypes.map(typeView); });
+  const canRun = (u, t) => isAdmin(u) || t.createdBy === u.id || ctx.allowed(t.access, u);
+  on('GET', '/api/workflow-types', ({ u }) => { needGpt(u); return db.flowTypes.filter(t => canRun(u, t)).map(typeView); });
   on('POST', '/api/workflow-types', ({ u, body }) => { needGpt(u); const t = { id: uid('ft'), ...cleanType(body), createdBy: u.id, createdByName: u.name, createdAt: now(), updatedAt: now() }; db.flowTypes.push(t); audit(u, 'Created a workflow', t.name, t.rules.length + ' rules'); return typeView(t); });
   on('PUT', '/api/workflow-types/:id', ({ u, p, body }) => { const t = ownType(u, p.id); Object.assign(t, cleanType(body, t), { updatedAt: now() }); audit(u, 'Changed a workflow', t.name); return typeView(t); });
   on('DELETE', '/api/workflow-types/:id', ({ u, p }) => { const t = ownType(u, p.id); db.flowTypes = db.flowTypes.filter(x => x.id !== t.id); audit(u, 'Deleted a workflow', t.name); return { ok: true }; });
@@ -335,6 +336,7 @@ module.exports = function install(ctx) {
   on('POST', '/api/workflows', ({ u, body }) => {
     needGpt(u);
     const t = typeOf(body.type); if (!t) throw err(400, 'Pick what to check.');
+    const own = db.flowTypes.find(x => 'custom:' + x.id === body.type); if (own && !canRun(u, own)) throw err(403, 'You do not have access to this workflow.');
     if (!(body.inputs || []).some(i => String(i.text || '').trim())) throw err(400, 'Add the documents to check.');
     const inputs = (body.inputs || []).map(i => ({ role: String(i.role || 'doc'), name: String(i.name || 'file').slice(0, 200), text: String(i.text || '') })).filter(i => i.text.trim());
     const out = t[1](inputs, body.options || {});
