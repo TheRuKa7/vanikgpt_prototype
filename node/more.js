@@ -54,5 +54,14 @@ module.exports = function install(ctx) {
   let busy = false;
   setInterval(async () => { if (busy || db.app.status !== 'running' || !db.device.online) return; busy = true; try { for (const a of db.automations) if (a.active && a.nextRunAt && new Date(a.nextRunAt) <= new Date()) await run(a); } finally { busy = false; } }, 30000).unref();
 
+  // ---------- folders for chats
+  db.folders = db.folders || [];
+  const fname = b => { const n = String(b.name || '').trim().slice(0, 40); if (!n) throw err(400, 'Give the folder a name.'); return n; };
+  on('POST', '/api/folders', ({ u, body }) => { needGpt(u); const f = { id: uid('fd'), userId: u.id, name: fname(body), createdAt: now() }; db.folders.push(f); return f; });
+  on('PUT', '/api/folders/:id', ({ u, p, body }) => { const f = own(db.folders, p.id, u, 'Folder'); f.name = fname(body); return f; });
+  on('DELETE', '/api/folders/:id', ({ u, p }) => { const f = own(db.folders, p.id, u, 'Folder'); db.folders = db.folders.filter(x => x.id !== f.id); db.chats.forEach(c => { if (c.folderId === f.id) c.folderId = null; }); return { ok: true }; });
+  // ---------- an admin looking at a person's chats: off unless the tenant turns it on, and always recorded
+  on('GET', '/api/admin/users/:id/chats', ({ u, p }) => { if (!db.app.config.safety.adminChats) throw err(403, "Opening people's chats is turned off for this tenant."); const who = byId(db.users, p.id, 'Person'); audit(u, "Listed a person's chats", who.name); return db.chats.filter(c => c.userId === who.id && !c.temp).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, messages: c.messages.length })); }, ctx.A);
+
   return { memoryFor };
 };

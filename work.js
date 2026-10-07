@@ -5,9 +5,9 @@ import { gptShell, chatNow } from './gpt.js';
 import { moreMenu } from './more.js';
 import { osShell, uploadFiles } from './os.js';
 
-const W = { tasks: null, key: '', access: null, akey: '' };
+const W = { tasks: null, key: '', access: null, akey: '', view: 'list', month: 0, autos: [] };
 export const workRouteChanged = () => { W.key = ''; W.akey = ''; };
-const loadTasks = () => api('GET', '/api/tasks').then(t => { W.tasks = t; rerender(); }).catch(e => toast(e.message, 'err'));
+const loadTasks = () => Promise.all([api('GET', '/api/tasks'), api('GET', '/api/automations').catch(() => [])]).then(([t, a]) => { W.tasks = t; W.autos = a; rerender(); }).catch(e => toast(e.message, 'err'));
 const plain = t => String(t || '').replace(/ ?\[\d{1,2}\]/g, '').replace(/\*\*/g, '').trim();
 const firstLine = t => { const l = plain(t).split('\n').map(x => x.replace(/^[-#>\s]+/, '').trim()).find(x => x.length > 8) || ''; return l.length > 110 ? l.slice(0, 107) + '…' : l; };
 const people = (me = true) => S.boot.users.filter(u => me || u.id !== S.boot.me.id);
@@ -63,12 +63,25 @@ function taskRow(t) {
     <div class="grow"><b>${esc(t.title)}</b>${t.note && t.note !== t.title ? `<div class="small muted tnote">${esc(t.note)}</div>` : ''}<div class="row wrap" style="gap:6px;margin-top:7px">${srcLink(t)}${who ? `<span class="small muted">${esc(who)}</span>` : ''}${t.due ? `<span class="small" style="color:var(--vnk-${late ? 'err' : 'ink-2'})">${late ? 'Was due' : 'Due'} ${new Date(t.due + 'T00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>` : ''}<span class="small faint">${ago(t.createdAt)}</span></div></div>
     <button class="icon-btn sm" data-act="task-menu" data-id="${t.id}" aria-label="More">${icon('more_horiz')}</button></div>`;
 }
+// A month at a glance: tasks on the day they are due, automations on the day they next run.
+function calendar() {
+  const base = new Date(); base.setDate(1); base.setMonth(base.getMonth() + W.month);
+  const y = base.getFullYear(), mo = base.getMonth(), first = (new Date(y, mo, 1).getDay() + 6) % 7, days = new Date(y, mo + 1, 0).getDate(), key = d => `${y}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`, today = new Date().toLocaleDateString('en-CA');
+  const on = {}; const put = (k, html) => { (on[k] = on[k] || []).push(html); };
+  for (const t of W.tasks) if (t.due) put(t.due, `<button class="ev ${t.status}" data-act="task-menu" data-id="${t.id}" title="${esc(t.title)}">${esc(t.title)}</button>`);
+  for (const a of W.autos) if (a.active && a.nextRunAt) put(new Date(a.nextRunAt).toLocaleDateString('en-CA'), `<a class="ev auto" href="#/gpt/library/automations" title="${esc(a.name)}">${icon('schedule')}${esc(a.name)}</a>`);
+  const cells = [...Array(first).fill(''), ...Array.from({ length: days }, (_, i) => i + 1)];
+  return `<div class="card"><div class="card-head"><button class="icon-btn sm" data-act="cal-move" data-v="-1" aria-label="Previous month">${icon('chevron_left')}</button><h3 style="min-width:150px;text-align:center">${base.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</h3><button class="icon-btn sm" data-act="cal-move" data-v="1" aria-label="Next month">${icon('chevron_right')}</button></div>
+    <div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="dow">${d}</div>`).join('')}${cells.map(d => d ? `<div class="day ${key(d) === today ? 'today' : ''}"><span class="n">${d}</span>${(on[key(d)] || []).join('')}</div>` : '<div class="day off"></div>').join('')}</div></div>`;
+}
+acts['cal-move'] = el => { W.month += +el.dataset.v; rerender(); };
+acts['task-view'] = el => { W.view = el.dataset.v; rerender(); };
 export function tasksPage() {
   if (W.key !== 'tasks') { W.key = 'tasks'; loadTasks(); }
   const l = W.tasks, me = S.boot.me.id, sec = (title, list, tip) => list.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h3>${title}</h3>${tip ? info(tip) : ''}<span class="mono">${list.length}</span></div>${list.map(taskRow).join('')}</div>` : '';
   const open = l ? l.filter(t => t.status === 'open') : [], todo = open.filter(t => t.kind === 'task' && t.assignee === me), shared = open.filter(t => t.kind === 'share' && t.assignee === me), out = open.filter(t => t.assignee !== me), done = l ? l.filter(t => t.status === 'done').slice(0, 30) : [];
-  return gptShell('tasks', `<div class="gpt-top">${navToggle()}<h3 class="grow">Tasks ${info('Things to do that came out of a chat, a document or a check. Each keeps a link to where it came from.', 'tip-down')}</h3><button class="btn" data-act="task-new">${icon('add')}New task</button></div>
-    <div class="scroll" id="scroll"><div class="page" style="max-width:860px">${!l ? '<p class="muted">Loading…</p>' : !l.length ? `<div class="empty">${icon('task_alt')}Nothing here yet. Open the ⋯ menu under any answer to add a task or share a finding.</div>`
+  return gptShell('tasks', `<div class="gpt-top">${navToggle()}<h3 class="grow">Tasks ${info('Things to do that came out of a chat, a document or a check. Each keeps a link to where it came from.', 'tip-down')}</h3><div class="seg"><button class="${W.view === 'list' ? 'on' : ''}" data-act="task-view" data-v="list">List</button><button class="${W.view === 'cal' ? 'on' : ''}" data-act="task-view" data-v="cal">Calendar</button></div><button class="btn" data-act="task-new">${icon('add')}New task</button></div>
+    <div class="scroll" id="scroll"><div class="page" style="max-width:${W.view === 'cal' ? 1100 : 860}px">${!l ? '<p class="muted">Loading…</p>' : W.view === 'cal' ? calendar() : !l.length ? `<div class="empty">${icon('task_alt')}Nothing here yet. Open the ⋯ menu under any answer to add a task or share a finding.</div>`
       : sec('To do', todo) + sec('Shared with you', shared, 'A colleague passed these on. Tick one when you have read it.') + sec('Waiting on others', out, 'Tasks and findings you sent to colleagues.') + (done.length ? `<details class="card"><summary><h3 style="display:inline">Done</h3> <span class="mono">${done.length}</span></summary><div style="margin-top:12px">${done.map(taskRow).join('')}</div></details>` : '') + (open.length ? '' : '<p class="muted" style="margin-top:14px">All clear.</p>')}</div></div>`);
 }
 const taskOf = id => W.tasks.find(t => t.id === id);

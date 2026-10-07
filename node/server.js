@@ -25,7 +25,7 @@ const cleanAccess = a => { const L = v => [...new Set(v || [])].map(String), den
 // ---------- state
 const defaultConfig = () => ({
   models: [], defaultModel: null, instructions: '', collections: 'all', access: { mode: 'everyone', teams: [], users: [] },
-  safety: { pii: 'mask', retentionDays: 0, uploads: true, blockedTopics: [], maskDocuments: false, dailyLimit: 0, voice: false },
+  safety: { pii: 'mask', retentionDays: 0, uploads: true, blockedTopics: [], maskDocuments: false, dailyLimit: 0, voice: false, adminChats: false },
   tools: { enabled: ['calculator', 'gst', 'tables', 'browser', 'screen'], browserMode: 'allowed', sites: [], signins: [] },
   advanced: { port: 9016, offline: true, telemetry: false, corsOrigin: '' },
 });
@@ -52,7 +52,7 @@ function seed() {
   };
 }
 let db = fs.existsSync(DBF) ? JSON.parse(fs.readFileSync(DBF, 'utf8')) : seed();
-for (const k of ['keys', 'webhooks', 'deliveries', 'connectors', 'workflows', 'prompts', 'commands', 'mcp', 'flowTypes']) db[k] = db[k] || [];
+for (const k of ['keys', 'webhooks', 'deliveries', 'connectors', 'workflows', 'prompts', 'commands', 'mcp', 'flowTypes', 'folders']) db[k] = db[k] || [];
 db.app.config.safety = { ...defaultConfig().safety, ...db.app.config.safety };
 db.app.config.tools = { ...defaultConfig().tools, ...(db.app.config.tools || {}) };
 const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
@@ -295,7 +295,7 @@ const docView = d => ({ id: d.id, collectionId: d.collectionId, name: d.name, si
 const canUseGpt = u => db.app.status === 'running' && db.device.online && allowed(db.app.config.access, u);
 const gptCollections = u => { const sel = db.app.config.collections; return db.collections.filter(c => allowed(c.access, u) && (sel === 'all' || sel.includes(c.id))); };
 const canSeeAssistant = (u, a) => a.createdBy === u.id || (a.shared && allowed(a.access, u));
-const chatRow = c => ({ id: c.id, title: c.title, pinned: !!c.pinned, shared: !!c.shared, assistantId: c.assistantId || null, updatedAt: c.updatedAt, createdAt: c.createdAt });
+const chatRow = c => ({ folderId: c.folderId || null, id: c.id, title: c.title, pinned: !!c.pinned, shared: !!c.shared, assistantId: c.assistantId || null, updatedAt: c.updatedAt, createdAt: c.createdAt });
 function attention() {
   const a = db.app, out = [], add = (text, action, href) => out.push({ text, action, href });
   if (!db.device.online) add('The Vanik Appliance is offline. Apps and models are stopped.', 'Settings', '#/os/settings');
@@ -340,6 +340,7 @@ function bootstrap(u) {
     gptCollectionIds: gptCollections(u).map(c => c.id),
     assistants: db.assistants.filter(x => canSeeAssistant(u, x)),
     chats: db.chats.filter(c => c.userId === u.id && !c.temp).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
+    folders: db.folders.filter(f => f.userId === u.id),
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
@@ -538,7 +539,7 @@ on('PUT', '/api/app/config', ({ u, body }) => {
     collections: c.collections === 'all' || !Array.isArray(c.collections) ? 'all' : c.collections.filter(id => db.collections.some(x => x.id === id)),
     access: cleanAccess(c.access),
     safety: { pii: ['off', 'flag', 'mask'].includes(c.safety && c.safety.pii) ? c.safety.pii : d.safety.pii, retentionDays: Math.max(0, Math.min(3650, +(c.safety && c.safety.retentionDays) || 0)), uploads: !(c.safety && c.safety.uploads === false),
-      blockedTopics: [...new Set(((c.safety && c.safety.blockedTopics) || []).map(t => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 30), maskDocuments: !!(c.safety && c.safety.maskDocuments), dailyLimit: Math.max(0, Math.min(10000, Math.round(+(c.safety && c.safety.dailyLimit) || 0))), voice: !!(c.safety && c.safety.voice) },
+      blockedTopics: [...new Set(((c.safety && c.safety.blockedTopics) || []).map(t => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 30), maskDocuments: !!(c.safety && c.safety.maskDocuments), dailyLimit: Math.max(0, Math.min(10000, Math.round(+(c.safety && c.safety.dailyLimit) || 0))), voice: !!(c.safety && c.safety.voice), adminChats: !!(c.safety && c.safety.adminChats) },
     tools: !c.tools ? d.tools : { enabled: (c.tools.enabled || []).filter(x => ['calculator', 'gst', 'tables', 'browser', 'screen'].includes(x)), browserMode: c.tools.browserMode === 'any' ? 'any' : 'allowed', sites: [...new Set((c.tools.sites || []).map(x => String(x).toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0]).filter(x => /^[a-z0-9.-]+$/.test(x)))].slice(0, 100),
       signins: (c.tools.signins || []).map(x => ({ host: String(x.host || '').toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0], kind: x.kind === 'sso' ? 'sso' : 'vault', account: String(x.account || '').trim().slice(0, 80) })).filter(x => /^[a-z0-9.-]+$/.test(x.host)).slice(0, 50) },
     advanced: { port: Math.max(1024, Math.min(65535, +(c.advanced && c.advanced.port) || 9016)), offline: !(c.advanced && c.advanced.offline === false), telemetry: !!(c.advanced && c.advanced.telemetry), corsOrigin: String((c.advanced && c.advanced.corsOrigin) || '').trim() },
@@ -611,6 +612,8 @@ on('PATCH', '/api/chats/:id', ({ u, p, body }) => {
   const c = myChat(u, p.id);
   if (body.title !== undefined) c.title = String(body.title).trim().slice(0, 120) || c.title;
   if (body.pinned !== undefined) c.pinned = !!body.pinned;
+  if (body.folderId !== undefined) c.folderId = db.folders.some(f => f.id === body.folderId && f.userId === u.id) ? body.folderId : null;
+  if (body.system !== undefined) c.system = String(body.system).trim().slice(0, 2000);
   if (body.shared !== undefined) { c.shared = !!body.shared; audit(u, c.shared ? 'Shared a chat' : 'Stopped sharing a chat'); }
   if (body.model && db.app.config.models.includes(body.model)) c.model = body.model;
   if (['quick', 'balanced', 'thorough'].includes(body.effort)) c.effort = body.effort;
@@ -621,9 +624,10 @@ on('PATCH', '/api/chats/:id', ({ u, p, body }) => {
 });
 on('GET', '/api/shared/:id', ({ u, p }) => {
   needGpt(u);
-  const c = db.chats.find(x => x.id === p.id && x.shared);
+  let c = db.chats.find(x => x.id === p.id && x.shared), asAdmin = false;
+  if (!c && isAdmin(u) && db.app.config.safety.adminChats) { c = db.chats.find(x => x.id === p.id && !x.temp); asAdmin = !!c && c.userId !== u.id; if (asAdmin) audit(u, "Opened a person's chat", (db.users.find(x => x.id === c.userId) || { name: 'Removed user' }).name, c.title); }
   if (!c) throw err(404, 'This chat is not shared, or no longer exists.');
-  return { id: c.id, title: c.title, mine: c.userId === u.id, ownerName: (db.users.find(x => x.id === c.userId) || { name: 'Removed user' }).name, messages: c.messages.map(m => ({ id: m.id, role: m.role, content: m.content, at: m.at, citations: m.citations || [], mode: m.mode, notice: m.notice, model: m.model, pii: m.pii, piiMode: m.piiMode })) };
+  return { asAdmin, id: c.id, title: c.title, mine: c.userId === u.id, ownerName: (db.users.find(x => x.id === c.userId) || { name: 'Removed user' }).name, messages: c.messages.map(m => ({ id: m.id, role: m.role, content: m.content, at: m.at, citations: m.citations || [], mode: m.mode, notice: m.notice, model: m.model, pii: m.pii, piiMode: m.piiMode })) };
 });
 on('DELETE', '/api/chats/:id', ({ u, p }) => { const c = myChat(u, p.id); db.chats = db.chats.filter(x => x.id !== c.id); db.documents = db.documents.filter(d => d.collectionId !== 'chat:' + c.id); audit(u, 'Deleted a chat'); return { ok: true }; });
 on('POST', '/api/chats/:id/files', ({ u, p, body }) => { needGpt(u); const c = myChat(u, p.id); if (!db.app.config.safety.uploads) throw err(403, 'Your admin has turned off file uploads in chat.'); const d = addDocument(u, 'chat:' + c.id, body); c.updatedAt = now(); audit(u, 'Attached a file in chat', d.name); return docView(d); });
@@ -668,6 +672,7 @@ async function answer(u, c, body, send, ctl, script) {
     while (c.messages.length && c.messages[c.messages.length - 1].role === 'assistant') c.messages.pop();
     userMsg = c.messages[c.messages.length - 1];
     if (!userMsg) throw err(400, 'Nothing to answer again.');
+    if (body.model && cfg.models.includes(body.model)) c.model = body.model;
   } else {
     const raw = String(body.content || '').trim();
     if (!raw) throw err(400, 'Type a question first.');
@@ -747,10 +752,11 @@ async function answer(u, c, body, send, ctl, script) {
   const top = hits.length ? hits[0] : null;
   const strength = h => { const r = h.via === top.via && top.score ? h.score / top.score : 0.6; return r >= 0.8 ? 'Strong' : r >= 0.45 ? 'Good' : 'Weak'; };
   msg.citations = hits.map(h => ({ n: h.n, docId: h.docId, docName: h.docName, collectionId: h.collectionId, page: h.page, chunkId: h.chunkId, snippet: h.text.slice(0, 240), via: h.via, strength: strength(h) }));
-  const mem = MO.memoryFor(u); if (mem.length) msg.memories = mem.length; if (cfg.instructions) msg.rules = true;
+  const mem = MO.memoryFor(u); if (mem.length) msg.memories = mem.length; if (cfg.instructions) msg.rules = true; if (c.system) msg.chatRules = true;
+  if (hits.length && !cmd) msg.followUps = followUps(question, hits);
   const sysBase = 'You are VanikGPT, a private assistant running on the company\'s own Vanik Appliance. Be direct and accurate. If you are not sure, say so.'
     + (cfg.instructions ? '\n\nHouse rules from the admin, which always apply:\n' + cfg.instructions : '') + (mem.length ? '\n\nWhat this person asked you to remember:\n- ' + mem.join('\n- ') : '')
-    + (as ? '\n\n' + as.instructions : '') + (older.length ? '\n\nEarlier in this chat:\n' + c.summary : '');
+    + (as ? '\n\n' + as.instructions : '') + (c.system ? '\n\nFor this chat only:\n' + c.system : '') + (older.length ? '\n\nEarlier in this chat:\n' + c.summary : '');
   const passText = (hits.length ? '\n\nAnswer from the sources below and cite them inline like [1]. If the sources do not contain the answer, say that plainly.\n\nSources:\n' + hits.map(h => `[${h.n}] ${h.docName}${h.page ? ' (page ' + h.page + ')' : ''}\n${h.text}`).join('\n\n') : '')
     + (sumText ? '\n\nSummarise the text below in at most seven plain bullets. Keep numbers, dates and names exact.\n\n' + sumText.slice(0, cap.passages * 4) : '')
     + (T.context.length ? '\n\nResults from tools, which are exact. Use them as they are and do not redo them:\n' + T.context.join('\n\n').slice(0, cap.passages * 4) : '');
@@ -771,6 +777,16 @@ async function answer(u, c, body, send, ctl, script) {
     for (const part of text.match(/\S+\s*/g) || []) { if (ctl.closed()) break; msg.content += part; send('delta', { t: part }); if (!usedTools) await new Promise(r => setTimeout(r, 12)); }
   }
   finish(usageOut);
+}
+// What to ask next: other sections of the documents the answer came from. Works without a model.
+function followUps(question, hits) {
+  const asked = new Set(tok(question)), out = [];
+  for (const id of [...new Set(hits.map(h => h.docId))].slice(0, 2)) {
+    const d = db.documents.find(x => x.id === id); if (!d) continue;
+    const name = d.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+    for (const k of d.chunks) for (const m of k.text.matchAll(/^#{2,3}\s+(.{3,60})$/gm)) { const h = m[1].trim(); if (tok(h).some(w => asked.has(w)) || out.some(o => o.includes(h.toLowerCase()))) continue; out.push(`What does the ${name} say about ${h.toLowerCase()}?`); if (out.length === 3) return out; }
+  }
+  return out;
 }
 // The most central sentences of a text, in their original order. Used for summaries when no model can be reached.
 function central(text, n) {

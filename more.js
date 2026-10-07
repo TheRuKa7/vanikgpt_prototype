@@ -60,7 +60,7 @@ acts['mem-new'] = () => remember('');
 acts['mem-del'] = async el => { await api('DELETE', '/api/memories/' + el.dataset.id); await reload(); };
 
 // Extra lines for the menu under an answer.
-export const moreMenu = (m, c) => ['-', { label: 'Remember this', sub: 'For your chats only', icon: 'psychology', run: () => remember(String(m.content).replace(/ ?\[\d{1,2}\]/g, '').replace(/[*#]/g, '').split('\n').find(l => l.trim().length > 8) || '') },
+export const moreMenu = (m, c) => [...(S.boot.app.config.models.length > 1 && c.messages[c.messages.length - 1] === m ? [{ label: 'Answer again with another model', icon: 'memory', run: () => menu(document.querySelector(`[data-act="msg-more"][data-id="${m.id}"]`), S.boot.app.config.models.map(id => ({ label: id, icon: 'memory', on: id === c.model, run: () => acts.regenWith(id) }))) }] : []), '-', { label: 'Remember this', sub: 'For your chats only', icon: 'psychology', run: () => remember(String(m.content).replace(/ ?\[\d{1,2}\]/g, '').replace(/[*#]/g, '').split('\n').find(l => l.trim().length > 8) || '') },
   { label: 'Save as a note', sub: 'Private to you', icon: 'sticky_note_2', run: async () => { await api('POST', '/api/notes', { title: c.title.slice(0, 120), text: String(m.content).replace(/ ?\[\d{1,2}\]/g, '') }); toast('Saved to your notes.'); } },
   { label: 'Save this chat as a skill', sub: 'Run the same steps again', icon: 'bolt', run: () => skillFromChat(c) }];
 
