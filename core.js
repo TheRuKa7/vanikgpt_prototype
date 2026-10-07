@@ -58,23 +58,37 @@ export function toast(msg, tone = '') {
 export function modal({ title, text = '', body = '', actions = [], wide = false, cancel = 'Cancel' }) {
   const o = document.createElement('div'); o.className = 'overlay';
   o.innerHTML = `<div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true"><h2>${esc(title)}</h2>${text ? `<p class="muted">${esc(text)}</p>` : ''}${body ? `<div class="body">${body}</div>` : ''}<div class="actions"></div></div>`;
-  const close = () => o.remove(), bar = $('.actions', o);
+  const back = document.activeElement, close = () => { o.remove(); if (back && back.isConnected) back.focus({ preventScroll: true }); }, bar = $('.actions', o);
   [{ label: cancel, ghost: true }, ...actions].forEach(a => {
     const b = document.createElement('button'); b.className = 'btn ' + (a.ghost ? 'ghost' : a.danger ? 'danger' : ''); b.textContent = a.label;
     b.onclick = async () => { if (!a.run) return close(); b.disabled = true; try { if (await a.run(o) !== false) close(); } catch (x) { toast(x.message, 'err'); } b.disabled = false; };
     bar.appendChild(b);
   });
   o.addEventListener('mousedown', e => { if (e.target === o) close(); });
-  o.addEventListener('keydown', e => { if (e.key === 'Escape') close(); if (e.key === 'Enter' && e.target.tagName === 'INPUT' && actions.length) bar.lastChild.click(); });
+  o.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT' && actions.length && !bar.lastChild.disabled) bar.lastChild.click();
+    if (e.key === 'Tab') { const f = $$('button:not(:disabled),input,textarea,select,a[href]', o).filter(x => x.offsetParent); if (!f.length) return; const first = f[0], last = f[f.length - 1]; if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); } }
+  });
   document.body.appendChild(o);
-  const f = $('input,textarea,select', o); if (f) f.focus();
+  const box = $('.modal', o); box.tabIndex = -1;
+  ($('input,textarea,select', o) || box).focus();
   return { el: o, close };
 }
 export const confirmBox = (title, text, label, run, danger = true) => modal({ title, text, actions: [{ label, danger, run }] });
-function closeMenu() { $$('.menu').forEach(m => m.remove()); document.removeEventListener('mousedown', outside, true); }
-function outside(e) { if (!e.target.closest('.menu')) closeMenu(); }
+let menuFor = null, menuShut = 0;
+function closeMenu(refocus) { const open = $$('.menu'); open.forEach(m => m.remove()); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', menuKey, true); if (open.length && menuFor) { menuFor.setAttribute('aria-expanded', 'false'); if (refocus && menuFor.isConnected) menuFor.focus({ preventScroll: true }); } menuFor = null; }
+function outside(e) { if (e.target.closest('.menu')) return; if (menuFor && menuFor.contains(e.target)) menuShut = Date.now(); closeMenu(); }
+function menuKey(e) {
+  const m = $('.menu'); if (!m) return;
+  if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); return closeMenu(true); }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault(); const bs = $$('button', m), i = bs.indexOf(document.activeElement);
+  bs[e.key === 'Home' ? 0 : e.key === 'End' ? bs.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : -1) + bs.length) % bs.length].focus();
+}
 export function menu(anchor, items) {
-  closeMenu();
+  const again = Date.now() - menuShut < 400; menuShut = 0;
+  closeMenu(); if (again) return; // a second click on the same button only closes
   const m = document.createElement('div'); m.className = 'menu'; m.setAttribute('role', 'menu');
   for (const it of items) {
     if (!it) continue;
@@ -87,10 +101,14 @@ export function menu(anchor, items) {
   }
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
-  let top = r.bottom + 6; if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  let top = r.bottom + 6; if (top + h > innerHeight - 8) top = r.top - h - 6 >= 8 ? r.top - h - 6 : Math.max(8, innerHeight - h - 8);
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px'; m.style.top = top + 'px';
-  setTimeout(() => document.addEventListener('mousedown', outside, true), 0);
+  m.style.transformOrigin = top < r.top ? 'bottom left' : 'top left';
+  menuFor = anchor.closest('button, a') || anchor; menuFor.setAttribute('aria-expanded', 'true');
+  setTimeout(() => { document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', menuKey, true); }, 0);
 }
+for (const ev of ['hashchange', 'resize', 'blur']) addEventListener(ev, () => closeMenu());
+addEventListener('hashchange', () => $$('.overlay').forEach(o => o.remove()));
 
 export const navToggle = () => `<button class="icon-btn nav-toggle" data-act="nav-toggle" aria-label="Menu">${icon('menu')}</button>`;
 acts['nav-toggle'] = () => document.body.classList.toggle('nav-open');

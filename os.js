@@ -58,7 +58,7 @@ acts['app-menu'] = el => {
     a.status === 'running' && { label: 'Stop', icon: 'stop_circle', run: () => confirmBox('Stop VanikGPT?', 'People will not be able to chat until you start it again. Chats are kept.', 'Stop', async () => { await api('POST', '/api/app/stop'); await refresh(); }) },
     a.status === 'stopped' && { label: 'Start', icon: 'play_circle', run: async () => { await api('POST', '/api/app/start'); await refresh(); watchDeploy(); } },
     '-',
-    { label: 'Uninstall', icon: 'delete_outline', danger: true, run: () => confirmBox('Uninstall VanikGPT?', 'The app is removed from the device and its setup is cleared. Chats and assistants are kept if you install it again.', 'Uninstall', async () => { await api('DELETE', '/api/app'); draft = null; await load(); go('#/os/apps'); }) },
+    { label: 'Uninstall', icon: 'delete_outline', danger: true, run: () => confirmBox('Uninstall VanikGPT?', 'The app is removed from the device and its setup is cleared. Chats and agents are kept if you install it again.', 'Uninstall', async () => { await api('DELETE', '/api/app'); draft = null; await load(); go('#/os/apps'); }) },
   ]);
 };
 
@@ -273,7 +273,7 @@ function pageKnowledge() {
       <div class="row"><span class="avatar sq">${esc(initials(c.name))}</span><div class="grow"><h3 class="ellipsis">${esc(c.name)}</h3><span class="mono">${c.docCount} ${c.docCount === 1 ? 'document' : 'documents'} · ${bytes(c.bytes)}</span></div><button class="icon-btn sm" data-act="col-menu" data-id="${c.id}" data-stop aria-label="More">${icon('more_vert')}</button></div>
       <div class="row wrap" style="gap:6px">${chip(c.docCount ? 'Searchable' : 'Empty', c.docCount ? 'ok' : '')}${chip(accessLabel(c.access), 'line', false)}${usedByGpt(c.id) ? chip('Used by VanikGPT', 'line', false) : chip('Not used by an app yet', 'line', false)}</div>
       <div class="foot"><span class="small faint grow">Updated ${ago(c.updatedAt)}</span><span class="small" style="font-weight:600">${c.docCount ? 'Open' : 'Add documents'} →</span></div></a>`).join('')}</div>
-      <p class="mono" style="margin-top:18px">${B.collections.length} ${B.collections.length === 1 ? 'collection' : 'collections'} · ${docs} documents · ${bytes(size)}</p>`
+      <p class="mono" style="margin-top:18px">${B.collections.length} ${B.collections.length === 1 ? 'collection' : 'collections'} · ${docs} ${docs === 1 ? 'document' : 'documents'} · ${bytes(size)}</p>`
     : `<div class="empty">${icon('library_books')}No collections yet. A collection is a set of documents an app can search.<br><button class="btn" data-act="col-new">New collection</button></div>`}`);
 }
 acts['col-new'] = () => modal({ title: 'New collection', body: `<div class="stack"><label class="field"><span>Name</span><input class="input" id="f-name" maxlength="80" placeholder="HR policies"></label><label class="field"><span>What is in it ${info('Shown to people when they choose where answers come from.')}</span><input class="input" id="f-desc" maxlength="140" placeholder="Leave, travel and expense rules"></label></div>`,
@@ -402,7 +402,7 @@ acts['user-invite'] = () => {
 };
 ins['user-role'] = async el => { await api('PATCH', '/api/users/' + el.dataset.id, { role: el.value }); toast('Role changed.'); await refresh(); };
 acts['user-teams'] = el => { const u = S.boot.users.find(x => x.id === el.dataset.id); modal({ title: 'Teams for ' + u.name, body: `<label class="field"><span>Teams ${info('Separate with commas.')}</span><input class="input" id="f-teams" value="${esc((u.teams || []).join(', '))}" placeholder="Finance, Legal"></label>`, actions: [{ label: 'Save', run: async o => { await api('PATCH', '/api/users/' + u.id, { teams: teamsOf($('#f-teams', o).value) }); await refresh(); } }] }); };
-acts['user-erase'] = el => { const u = S.boot.users.find(x => x.id === el.dataset.id); confirmBox(`Erase ${u.name}'s data?`, 'Their chats, files attached in chats, saved prompts, private assistants and feedback are removed for good. The account stays.', 'Erase', async () => { const r = await api('POST', `/api/users/${u.id}/erase`); toast(`Erased ${r.chats} chats, ${r.files} files and ${r.prompts} prompts.`); await refresh(); }); };
+acts['user-erase'] = el => { const u = S.boot.users.find(x => x.id === el.dataset.id); confirmBox(`Erase ${u.name}'s data?`, 'Their chats, files attached in chats, saved prompts, private agents and feedback are removed for good. The account stays.', 'Erase', async () => { const r = await api('POST', `/api/users/${u.id}/erase`); const n = (c, w) => `${c} ${w}${c === 1 ? "" : "s"}`; toast(`Erased ${n(r.chats, "chat")}, ${n(r.files, "file")} and ${n(r.prompts, "prompt")}.`); await refresh(); }); };
 acts['user-remove'] = el => { const u = S.boot.users.find(x => x.id === el.dataset.id); confirmBox(`Remove ${u.name}?`, 'They lose access to every app straight away. Their chats are deleted.', 'Remove', async () => { await api('DELETE', '/api/users/' + u.id); await refresh(); }); };
 
 // ---------- Settings and unchanged pages

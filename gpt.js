@@ -273,7 +273,7 @@ function msgHtml(m, last, readOnly) {
       <button class="icon-btn sm ${m.feedback === 'up' ? 'on' : ''}" data-act="msg-up" data-id="${m.id}" data-tip="Helpful" aria-label="Helpful">${icon('thumb_up_off_alt')}</button>
       <button class="icon-btn sm ${m.feedback === 'down' ? 'on' : ''}" data-act="msg-down" data-id="${m.id}" data-tip="Not helpful" aria-label="Not helpful">${icon('thumb_down_off_alt')}</button>
       <button class="icon-btn sm" data-act="msg-details" data-id="${m.id}" data-tip="How this answer was made" aria-label="How this answer was made">${icon('insights')}</button>
-      <span class="mono" style="margin-left:8px">${esc(m.mode === 'model' ? m.model || '' : m.mode === 'documents' ? 'documents only' : m.mode === 'tool' ? 'plugins' : m.mode === 'search' ? 'search only' : '')}${m.effort && m.effort !== 'balanced' ? ' · ' + m.effort : ''}${secs ? ' · ' + secs : ''}</span>
+      <span class="mono" style="margin-left:8px">${esc([m.mode === 'model' ? m.model || '' : m.mode === 'documents' ? 'documents only' : m.mode === 'tool' ? 'plugins' : m.mode === 'search' ? 'search only' : '', m.effort && m.effort !== 'balanced' ? m.effort : '', secs].filter(Boolean).join(' · '))}</span>
     </div>`}</div></div>`;
 }
 const findMsg = id => G.chat.messages.find(m => m.id === id);

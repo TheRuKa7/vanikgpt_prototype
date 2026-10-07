@@ -317,8 +317,8 @@ const probes = () => {
     { name: 'Inference', state: up && db.models.some(m => m.status === 'serving') ? 'ok' : 'idle', detail: db.models.filter(m => m.status === 'serving').length + ' serving' },
     { name: 'Model gateway', state: GW.ok ? 'ok' : GW.url ? 'down' : 'idle', detail: GW.ok ? 'Reachable' : GW.url ? 'Not reachable' : 'No model server connected' },
     { name: 'App runtime', state: up && db.app.status === 'running' ? 'ok' : 'idle', detail: db.app.status === 'running' ? 'VanikGPT running' : 'No app running' },
-    { name: 'Knowledge index', state: pass ? 'ok' : 'idle', detail: `${pass} passages, ${emb} with meaning-based search` },
-    { name: 'Connectors', state: db.connectors.some(c => c.error) ? 'down' : db.connectors.length ? 'ok' : 'idle', detail: db.connectors.length + ' folders' },
+    { name: 'Knowledge index', state: pass ? 'ok' : 'idle', detail: `${pass} ${pass === 1 ? 'passage' : 'passages'}, ${emb} with meaning-based search` },
+    { name: 'Connectors', state: db.connectors.some(c => c.error) ? 'down' : db.connectors.length ? 'ok' : 'idle', detail: db.connectors.length + (db.connectors.length === 1 ? ' folder' : ' folders') },
     { name: 'Webhooks', state: FX.failedDeliveries() ? 'down' : db.webhooks.length ? 'ok' : 'idle', detail: db.webhooks.length + ' set up' },
   ];
 };
@@ -553,7 +553,7 @@ on('POST', '/api/app/rollback', ({ u, body }) => {
 }, A);
 on('POST', '/api/app/stop', ({ u }) => { if (db.app.status !== 'running') throw err(409, 'VanikGPT is not running.'); db.app.status = 'stopped'; audit(u, 'Stopped VanikGPT'); return { ok: true }; }, A);
 on('POST', '/api/app/start', ({ u }) => { if (db.app.status !== 'stopped') throw err(409, 'VanikGPT is not stopped.'); startDeploy(u, 'Start'); return { ok: true }; }, A);
-on('DELETE', '/api/app', ({ u }) => { if (db.app.status === 'not_installed') throw err(409, 'VanikGPT is not installed.'); db.app = freshApp(); FX.revokeSystemKeys('VanikGPT'); audit(u, 'Uninstalled VanikGPT', db.device.name, 'Chats and assistants kept'); return { ok: true }; }, A);
+on('DELETE', '/api/app', ({ u }) => { if (db.app.status === 'not_installed') throw err(409, 'VanikGPT is not installed.'); db.app = freshApp(); FX.revokeSystemKeys('VanikGPT'); audit(u, 'Uninstalled VanikGPT', db.device.name, 'Chats and agents kept'); return { ok: true }; }, A);
 on('POST', '/api/app/check', async () => ({ ok: await checkGateway(), configured: !!GW.url }), A);
 on('GET', '/api/admin/usage', () => usage(), A);
 on('GET', '/api/admin/audit', () => db.audit.slice(0, 400), A);
@@ -567,8 +567,8 @@ on('GET', '/api/admin/audit/export', () => ({ name: 'audit-log', csv: ['seq,when
 // assistants
 const cleanAssistant = (b, u, prev = {}) => {
   const name = String(b.name || '').trim();
-  if (!name) throw err(400, 'Give the assistant a name.');
-  if (!String(b.instructions || '').trim()) throw err(400, 'Tell the assistant what to do.');
+  if (!name) throw err(400, 'Give the agent a name.');
+  if (!String(b.instructions || '').trim()) throw err(400, 'Tell the agent what to do.');
   const shared = isAdmin(u) && b.shared !== false && (b.shared || prev.shared);
   return { name: name.slice(0, 60), description: String(b.description || '').trim().slice(0, 140), instructions: String(b.instructions).trim().slice(0, 6000),
     model: db.app.config.models.includes(b.model) ? b.model : null,
@@ -576,10 +576,10 @@ const cleanAssistant = (b, u, prev = {}) => {
     starters: (b.starters || []).map(s => String(s).trim()).filter(Boolean).slice(0, 4), shared: !!shared,
     tools: (b.tools || []).filter(x => ['calculator', 'gst', 'tables', 'browser', 'screen'].includes(x)), effort: ['quick', 'balanced', 'thorough'].includes(b.effort) ? b.effort : 'balanced', workflow: ['three_way', 'kyc', 'quotes'].includes(b.workflow) ? b.workflow : null, icon: /^[a-z_]{2,30}$/.test(b.icon || '') ? b.icon : 'smart_toy', access: shared ? cleanAccess(b.access) : { mode: 'restricted', teams: [], users: [] } };
 };
-const ownAssistant = (u, id) => { const a = byId(db.assistants, id, 'Assistant'); if (!(isAdmin(u) || a.createdBy === u.id)) throw err(403, 'You can only change assistants you made.'); return a; };
-on('POST', '/api/assistants', ({ u, body }) => { const a = { id: uid('as'), ...cleanAssistant(body, u), createdBy: u.id, createdByName: u.name, createdAt: now(), updatedAt: now() }; db.assistants.push(a); audit(u, 'Created an assistant', a.name, a.shared ? 'Shared' : 'Private'); return a; });
-on('PUT', '/api/assistants/:id', ({ u, p, body }) => { const a = ownAssistant(u, p.id); Object.assign(a, cleanAssistant(body, u, a), { updatedAt: now() }); audit(u, 'Changed an assistant', a.name); return a; });
-on('DELETE', '/api/assistants/:id', ({ u, p }) => { const a = ownAssistant(u, p.id); db.assistants = db.assistants.filter(x => x.id !== a.id); db.chats.forEach(c => { if (c.assistantId === a.id) c.assistantId = null; }); audit(u, 'Deleted an assistant', a.name); return { ok: true }; });
+const ownAssistant = (u, id) => { const a = byId(db.assistants, id, 'Agent'); if (!(isAdmin(u) || a.createdBy === u.id)) throw err(403, 'You can only change agents you made.'); return a; };
+on('POST', '/api/assistants', ({ u, body }) => { const a = { id: uid('as'), ...cleanAssistant(body, u), createdBy: u.id, createdByName: u.name, createdAt: now(), updatedAt: now() }; db.assistants.push(a); audit(u, 'Created an agent', a.name, a.shared ? 'Shared' : 'Private'); return a; });
+on('PUT', '/api/assistants/:id', ({ u, p, body }) => { const a = ownAssistant(u, p.id); Object.assign(a, cleanAssistant(body, u, a), { updatedAt: now() }); audit(u, 'Changed an agent', a.name); return a; });
+on('DELETE', '/api/assistants/:id', ({ u, p }) => { const a = ownAssistant(u, p.id); db.assistants = db.assistants.filter(x => x.id !== a.id); db.chats.forEach(c => { if (c.assistantId === a.id) c.assistantId = null; }); audit(u, 'Deleted an agent', a.name); return { ok: true }; });
 
 // chats
 const needGpt = u => { if (db.app.status !== 'running') throw err(503, 'VanikGPT is not running.'); if (!db.device.online) throw err(503, 'The Vanik Appliance is offline.'); if (!allowed(db.app.config.access, u)) throw err(403, 'You have not been given VanikGPT.'); };

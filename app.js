@@ -34,7 +34,7 @@ async function render() {
     const sc = $('#scroll'), keep = hash === lastHash && sc ? sc.scrollTop : 0;
     const moved = hash !== lastHash;
     root.innerHTML = html; lastHash = hash;
-    if (moved) { root.classList.remove('fresh'); void root.offsetWidth; root.classList.add('fresh'); }
+    root.classList.remove('fresh'); if (moved) { void root.offsetWidth; root.classList.add('fresh'); } // entry motion only when the page changes, not on every redraw
     const ns = $('#scroll'); if (ns && keep) ns.scrollTop = keep;
     gptAfterRender();
   } catch (e) { if (S.userId) toast(e.message, 'err'); }
