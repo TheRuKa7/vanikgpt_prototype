@@ -268,3 +268,9 @@ table.list tr:first-child th:last-child { text-align: right; }
 .gpt-nav .nav-item .count { font: 600 10.5px var(--mono); background: var(--vnk-accent); color: var(--vnk-accent-fg); border-radius: 999px; padding: 1px 7px; }
 details.card > summary { cursor: pointer; list-style: none; } details.card > summary::-webkit-details-marker { display: none; } details.adv > summary { cursor: pointer; color: var(--vnk-ink-2); }
 .tag.on.bad { background: var(--vnk-err); border-color: var(--vnk-err); color: #fff; }
+
+/* ---------- library, python blocks */
+.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.pyblock { margin: 0 0 10px; } .pyblock > pre { margin-bottom: 6px; } .pyblock .row { gap: 10px; } .pyblock .btn { height: 28px; padding: 0 12px; }
+.pyblock .out { margin-top: 8px; background: var(--vnk-surface); border: 1px solid var(--vnk-border); border-left: 3px solid var(--vnk-ok); white-space: pre-wrap; } .pyblock .out.bad { border-left-color: var(--vnk-err); }
+.tabs a .mono { margin-left: 4px; }

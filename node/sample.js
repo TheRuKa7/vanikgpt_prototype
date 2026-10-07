@@ -378,6 +378,16 @@ async function seed(x) {
     await call(asha, 'POST', '/api/tasks', { kind: 'share', title: 'Our contract price for M12 bolts is ₹11.80, not ₹12.50', note: 'Found on the supplier portal under Contract prices. The last purchase order used the list price of ₹12.50. On 5,000 pieces that is ₹3,500 more than it should be.', assignee: owner.id, source: { type: 'web', name: 'Contract prices', url: `https://${HOST}/account` } });
     const doneT = await call(owner, 'POST', '/api/tasks', { title: 'Submit the Pune travel claim within 15 days of returning', source: { type: 'doc', docId: db.documents.find(d => d.name === 'leave-and-travel-policy.md').id, name: 'leave-and-travel-policy.md' } });
     await call(owner, 'PATCH', '/api/tasks/' + doneT.id, { status: 'done' });
+    // the things a person keeps for themselves: memory, notes, skills, an automation; and the admin's house rules
+    const live = JSON.parse(JSON.stringify(db.app.config)); live.instructions = 'Answer in plain English. Quote amounts in rupees with Indian digit grouping. Never give legal or tax advice as final: point to the policy or the finance team.';
+    await call(owner, 'PUT', '/api/app/config', { config: live, note: 'House rules', deploy: true }); fastDeploy();
+    for (const t of ['I work in plant maintenance in Pune.', 'Keep answers short, with the rule first and the detail after.']) await call(owner, 'POST', '/api/memories', { text: t });
+    await call(owner, 'POST', '/api/notes', { title: 'Questions for the Shree Fasteners review', text: '- Why did the October sheet price reach an invoice?\n- Can they hold 12.50 for the M12 bolt through March?\n- Ask for the corrected invoice number once it is issued.' });
+    await call(owner, 'POST', '/api/notes', { title: 'Pune visit checklist', text: 'Book the flight 7 days ahead. Hotel under 6,000 a night. Keep every bill. Claim within 15 days.' });
+    await call(owner, 'POST', '/api/skills', { name: 'Check a supplier invoice', description: 'Checks the GSTIN, reads the purchase order from the ERP and shows what is owed.', shared: true, steps: ['/gst 27AAPFU0939F1ZV', '/use get_purchase_order po_number=PO-2026-0412', '/use vendor_balance vendor="Shree Fasteners"'] });
+    await call(owner, 'POST', '/api/skills', { name: 'Price a part on the supplier portal', description: 'Searches the portal for a part and reads its price and lead time.', shared: true, steps: [`/browse https://${HOST} then type "M12" into "Search parts" then click "Search"`, `/browse https://${HOST}/part/M12-HB-50 find the unit price and lead time`] });
+    const auto = await call(owner, 'POST', '/api/automations', { name: 'What we owe Shree Fasteners', prompt: '/use vendor_balance vendor="Shree Fasteners"', every: 'day', assistantId: invoice.id });
+    await call(owner, 'POST', `/api/automations/${auto.id}/run`);
     audit(owner, 'Loaded the sample workspace', 'Vanik OS', '3 collections, 4 agents, 4 chats, 5 workflow runs');
     db.sample = { at: new Date().toISOString(), hook: hook.id, erp: erp.id };
   } finally { state.pace = was; }

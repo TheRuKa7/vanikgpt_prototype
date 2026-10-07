@@ -2,6 +2,7 @@
 // Also the Access page in Vanik OS: who may use each collection, agent, plugin, tool connector and workflow.
 import { S, $, esc, icon, info, chip, go, ago, api, refresh, rerender, acts, toast, modal, menu, confirmBox, navToggle, accessDrafts, accessPicker, accessLabel, pickFiles } from './core.js';
 import { gptShell, chatNow } from './gpt.js';
+import { moreMenu } from './more.js';
 import { osShell, uploadFiles } from './os.js';
 
 const W = { tasks: null, key: '', access: null, akey: '' };
@@ -38,7 +39,7 @@ acts['msg-more'] = el => {
   const web = (m.activity || []).map(a => a.url).filter(Boolean).pop() || '', source = web ? { type: 'web', name: c.title, url: web } : { type: 'chat', chatId: c.id, msgId: m.id, name: c.title }, note = plain(m.content);
   menu(el, [{ label: 'Save to knowledge', sub: 'Keep it as a note others can find', icon: 'bookmark_add', run: () => noteModal({ title: firstLine(q) || c.title, note, from: web || 'a chat' }) },
     { label: 'Add as a task', sub: 'For you or a colleague', icon: 'add_task', run: () => taskModal({ title: firstLine(m.content), note, source }) },
-    { label: 'Share with a colleague', sub: 'They get the text, not your chat', icon: 'send', run: () => shareModal({ title: firstLine(m.content), note, source }) }]);
+    { label: 'Share with a colleague', sub: 'They get the text, not your chat', icon: 'send', run: () => shareModal({ title: firstLine(m.content), note, source }) }, ...moreMenu(m, c)]);
 };
 
 // ---------- from the knowledge base: notes, files, tasks out of a document

@@ -24,7 +24,7 @@ const cleanAccess = a => { const L = v => [...new Set(v || [])].map(String), den
 
 // ---------- state
 const defaultConfig = () => ({
-  models: [], defaultModel: null, collections: 'all', access: { mode: 'everyone', teams: [], users: [] },
+  models: [], defaultModel: null, instructions: '', collections: 'all', access: { mode: 'everyone', teams: [], users: [] },
   safety: { pii: 'mask', retentionDays: 0, uploads: true, blockedTopics: [], maskDocuments: false, dailyLimit: 0, voice: false },
   tools: { enabled: ['calculator', 'gst', 'tables', 'browser', 'screen'], browserMode: 'allowed', sites: [], signins: [] },
   advanced: { port: 9016, offline: true, telemetry: false, corsOrigin: '' },
@@ -57,6 +57,7 @@ db.app.config.safety = { ...defaultConfig().safety, ...db.app.config.safety };
 db.app.config.tools = { ...defaultConfig().tools, ...(db.app.config.tools || {}) };
 const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
 const WK = { canWrite: () => false, openTasks: () => 0 };
+const MO = { memoryFor: () => [] };
 const SYSTEM = { id: 'system', name: 'Vanik OS', role: 'owner', teams: [] };
 const FX = { emit() {}, issueKey() {}, revokeSystemKeys() {}, pendingApprovals: () => 0, failedDeliveries: () => 0 };
 let saveT;
@@ -338,7 +339,7 @@ function bootstrap(u) {
     collections: (admin ? db.collections : db.collections.filter(c => allowed(c.access, u))).map(c => ({ ...collectionView(c), canWrite: WK.canWrite(u, c) })),
     gptCollectionIds: gptCollections(u).map(c => c.id),
     assistants: db.assistants.filter(x => canSeeAssistant(u, x)),
-    chats: db.chats.filter(c => c.userId === u.id).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
+    chats: db.chats.filter(c => c.userId === u.id && !c.temp).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
@@ -369,6 +370,8 @@ function usage() {
   };
 }
 function purge() {
+  const stale = db.chats.filter(c => c.temp && Date.now() - new Date(c.updatedAt) > 72e5).map(c => c.id);
+  if (stale.length) { db.chats = db.chats.filter(c => !stale.includes(c.id)); db.documents = db.documents.filter(d => !stale.some(id => d.collectionId === 'chat:' + id)); }
   const today = now().slice(0, 10), exp = db.documents.filter(x => x.expiresOn && x.expiresOn < today);
   if (exp.length) { db.documents = db.documents.filter(x => !exp.includes(x)); audit(SYSTEM, 'Removed expired documents', exp.length + ' documents', 'Past their keep-until date'); }
   const d = db.app.config.safety.retentionDays;
@@ -531,7 +534,7 @@ on('PUT', '/api/app/config', ({ u, body }) => {
   if (a.status === 'not_installed') throw err(400, 'Install VanikGPT first.');
   const models = (c.models || []).filter(id => db.models.some(m => m.id === id && m.kind === 'chat'));
   const cfg = {
-    models, defaultModel: models.includes(c.defaultModel) ? c.defaultModel : (models[0] || null),
+    models, defaultModel: models.includes(c.defaultModel) ? c.defaultModel : (models[0] || null), instructions: String(c.instructions || '').trim().slice(0, 4000),
     collections: c.collections === 'all' || !Array.isArray(c.collections) ? 'all' : c.collections.filter(id => db.collections.some(x => x.id === id)),
     access: cleanAccess(c.access),
     safety: { pii: ['off', 'flag', 'mask'].includes(c.safety && c.safety.pii) ? c.safety.pii : d.safety.pii, retentionDays: Math.max(0, Math.min(3650, +(c.safety && c.safety.retentionDays) || 0)), uploads: !(c.safety && c.safety.uploads === false),
@@ -597,6 +600,7 @@ on('POST', '/api/chats', ({ u, body }) => {
   const as = body.assistantId ? db.assistants.find(a => a.id === body.assistantId && canSeeAssistant(u, a)) : null;
   const cfg = db.app.config;
   const c = { id: uid('c'), userId: u.id, title: 'New chat', pinned: false, assistantId: as ? as.id : null, model: (as && as.model) || (cfg.models.includes(body.model) ? body.model : cfg.defaultModel), sources: as ? as.collections : (body.sources === 'none' || Array.isArray(body.sources) ? body.sources : 'all'), createdAt: now(), updatedAt: now(), messages: [] };
+  if (body.temp) c.temp = true;
   c.effort = (as && as.effort) || (['quick', 'balanced', 'thorough'].includes(body.effort) ? body.effort : 'balanced');
   if (Array.isArray(body.plugins)) c.plugins = body.plugins.map(String);
   if (Array.isArray(body.connectors)) c.connectors = body.connectors.map(String);
@@ -702,11 +706,14 @@ async function answer(u, c, body, send, ctl, script) {
   const topic = resume ? null : (cfg.safety.blockedTopics || []).find(t => new RegExp('(^|[^\\p{L}\\p{N}])' + escRe(t) + '($|[^\\p{L}\\p{N}])', 'iu').test(userMsg.content));
   if (topic) { msg.mode = 'blocked'; msg.notice = 'blocked_topic'; msg.model = null; audit(u, 'Blocked a question', topic, 'Matches a blocked topic'); return finish(); }
 
+  const py = (typed || userMsg.content).match(/^\/py\s+([\s\S]+)/i);
+  if (py && !resume) { msg.mode = 'tool'; msg.model = null; msg.content = '```python\n' + py[1].trim() + '\n```'; act({ id: uid('act'), kind: 'tool', tool: 'code', label: 'Python', state: 'done', result: 'Press Run. It runs in your browser, not on the appliance.' }); send('delta', { t: msg.content }); return finish(); }
   // Plugins first: exact tools and the sandboxed browser.
   const on = (cfg.tools.enabled || []).filter(t => (as ? (as.tools || []).includes(t) : !Array.isArray(c.plugins) || c.plugins.includes(t))).filter(t => allowed(db.pluginAccess[t], u));
   // Plugins work on the text as typed, on the device. In mask mode the IDs are shortened in everything that is stored or sent on.
   const shorten = cfg.safety.pii === 'mask' ? t => PII.reduce((x, [, re, check]) => x.replace(re, m => (check && !check(m)) || m.length < 8 || /^https?:/.test(m) ? m : m.slice(0, 2) + '…' + m.slice(-3)), String(t)) : null;
   const T = await AG.runTools(c, typed || userMsg.content, on, null, act, resume, shorten);
+  if (T.ask) { msg.mode = 'tool'; msg.model = null; msg.ask = T.ask; msg.content = T.ask.question; send('delta', { t: msg.content }); return finish(); }
   if (T.interrupt) { c.pending = T.interrupt; msg.mode = 'tool'; msg.model = null; msg.interrupt = { id: T.interrupt.id, reason: T.interrupt.reason, detail: T.interrupt.detail, kind: T.interrupt.kind || 'step' }; audit(u, 'Agent asked for a go-ahead', T.interrupt.reason); return finish(); }
   if (T.stopped) { msg.toolError = T.stopped; if (T.blockedHost) msg.blockedHost = T.blockedHost; }
   const usedTools = T.context.length > 0 || T.direct.length > 0 || !!T.stopped;
@@ -740,7 +747,9 @@ async function answer(u, c, body, send, ctl, script) {
   const top = hits.length ? hits[0] : null;
   const strength = h => { const r = h.via === top.via && top.score ? h.score / top.score : 0.6; return r >= 0.8 ? 'Strong' : r >= 0.45 ? 'Good' : 'Weak'; };
   msg.citations = hits.map(h => ({ n: h.n, docId: h.docId, docName: h.docName, collectionId: h.collectionId, page: h.page, chunkId: h.chunkId, snippet: h.text.slice(0, 240), via: h.via, strength: strength(h) }));
+  const mem = MO.memoryFor(u); if (mem.length) msg.memories = mem.length; if (cfg.instructions) msg.rules = true;
   const sysBase = 'You are VanikGPT, a private assistant running on the company\'s own Vanik Appliance. Be direct and accurate. If you are not sure, say so.'
+    + (cfg.instructions ? '\n\nHouse rules from the admin, which always apply:\n' + cfg.instructions : '') + (mem.length ? '\n\nWhat this person asked you to remember:\n- ' + mem.join('\n- ') : '')
     + (as ? '\n\n' + as.instructions : '') + (older.length ? '\n\nEarlier in this chat:\n' + c.summary : '');
   const passText = (hits.length ? '\n\nAnswer from the sources below and cite them inline like [1]. If the sources do not contain the answer, say that plainly.\n\nSources:\n' + hits.map(h => `[${h.n}] ${h.docName}${h.page ? ' (page ' + h.page + ')' : ''}\n${h.text}`).join('\n\n') : '')
     + (sumText ? '\n\nSummarise the text below in at most seven plain bullets. Keep numbers, dates and names exact.\n\n' + sumText.slice(0, cap.passages * 4) : '')
@@ -790,6 +799,7 @@ function readPage(question, snap) {
 Object.assign(FX, require('./features')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM, addDocument, verhoeff, commandViews, probes, search, allowed, estTok, streamModel, passageAnswer }));
 Object.assign(AG, require('./agent')({ allowed, DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
 Object.assign(WK, require('./work')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, allowed, cleanAccess, addDocument, canReadDoc, plugins: () => AG.PLUGINS }));
+Object.assign(MO, require('./more')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, save, call: (...a) => call(...a), ask: (u, c, body) => answer(u, c, body, () => {}, quiet) }));
 
 // The sample workspace is built through the same routes a person uses, once, when the server starts with --demo.
 const call = async (u, m, p, body) => { let match; const r = routes.find(x => x.m === m && (match = p.match(x.re))); if (!r) throw err(404, 'Not found: ' + p); return r.fn({ u, body: body || {}, p: match.groups || {}, q: new URLSearchParams(), req: { headers: {} }, res: { headersSent: false, setHeader() {}, writeHead() {}, end() {} } }); };

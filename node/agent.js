@@ -244,10 +244,10 @@ module.exports = function install(ctx) {
     if (hi < 0 || !data.length) return { error: `No table with a header row was found in ${f.name}.` };
     const Q = nrm(q), col = (after) => { const cands = head.map((h, i) => ({ i, h, n: nrm(h) })).filter(c => c.n && Q.includes(c.n)); if (!cands.length) return null; if (after) { const pos = Q.indexOf(after); const later = cands.filter(c => Q.indexOf(c.n, pos) >= pos); if (later.length) return later.sort((a, b) => Q.indexOf(a.n, pos) - Q.indexOf(b.n, pos))[0]; } return cands.sort((a, b) => b.n.length - a.n.length)[0]; };
     const src = `From ${f.name}, ${data.length} rows.`, tbl = (h, rs) => '| ' + h.join(' | ') + ' |\n|' + h.map(() => '---').join('|') + '|\n' + rs.map(r => '| ' + r.join(' | ') + ' |').join('\n');
-    let m;
+    let m; const numeric = () => head.filter((h, i) => h && data.some(r => toNum(r[i]) !== null)).slice(0, 3);
     if (/\bcolumns?\b|\bheaders?\b/.test(Q) && !/sum|total|average|count/.test(Q)) return { text: `Columns: ${head.join(', ')}.\n\n${src}` };
     if ((m = Q.match(/\btop (\d+)\b/)) || /\b(highest|largest|biggest|lowest|smallest)\b/.test(Q)) {
-      const c = col('by') || col(); if (!c) return { error: `Say which column, for example: top 3 by ${head[head.length - 1]}.` };
+      const c = col('by') || col(); if (!c) return { error: `Say which column, for example: top 3 by ${head[head.length - 1]}.`, ask: { question: `Which column of ${f.name} should I rank by?`, options: numeric().map(h => ({ label: h, send: `/table ${m ? 'top ' + m[1] : /lowest|smallest/.test(Q) ? 'lowest' : 'highest'} by ${h}` })) } };
       const low = /\b(lowest|smallest)\b/.test(Q), n = m ? +m[1] : 1, sorted = data.filter(r => toNum(r[c.i]) !== null).sort((a, b) => (toNum(b[c.i]) - toNum(a[c.i])) * (low ? -1 : 1)).slice(0, n);
       return { text: `${low ? 'Lowest' : 'Top'} ${sorted.length} by ${c.h}:\n\n${tbl(head, sorted)}\n\n${src}` };
     }
@@ -262,7 +262,7 @@ module.exports = function install(ctx) {
     }
     const op = /\b(average|mean)\b/.test(Q) ? 'avg' : /\b(sum|total|add up)\b/.test(Q) ? 'sum' : /\b(min|minimum)\b/.test(Q) ? 'min' : /\b(max|maximum)\b/.test(Q) ? 'max' : null;
     if (op) {
-      const c = col('of') || col(); if (!c) return { error: `Say which column. This file has: ${head.join(', ')}.` };
+      const c = col('of') || col(); if (!c) return { error: `Say which column. This file has: ${head.join(', ')}.`, ask: { question: `Which column of ${f.name}?`, options: numeric().map(h => ({ label: h, send: `/table ${{ sum: 'total', avg: 'average', min: 'minimum', max: 'maximum' }[op]} of ${h}` })) } };
       const nums = data.map(r => toNum(r[c.i])).filter(x => x !== null); if (!nums.length) return { error: `${c.h} has no numbers.` };
       const v = op === 'sum' ? nums.reduce((a, b) => a + b, 0) : op === 'avg' ? nums.reduce((a, b) => a + b, 0) / nums.length : op === 'min' ? Math.min(...nums) : Math.max(...nums);
       return { text: `${{ sum: 'Total', avg: 'Average', min: 'Lowest', max: 'Highest' }[op]} of ${c.h}: **${fmt(Math.round(v * 100) / 100)}** (${nums.length} values)\n\n${src}` };
@@ -335,7 +335,7 @@ module.exports = function install(ctx) {
     for (const p of plan) {
       if (p.tool === 'calculator') { const id = uid('act'), v = calc(p.expr); act({ id, kind: 'tool', tool: 'calculator', label: 'Work out ' + p.expr, state: 'done', result: fmt(v) }); res.context.push(`Calculator: ${p.expr} = ${fmt(v)}`); res.direct.push(`${p.expr.replace(/\*/g, '×')} = **${fmt(v)}**`); }
       if (p.tool === 'gst') { const id = uid('act'), lines = gstTool(p.text); act({ id, kind: 'tool', tool: 'gst', label: 'Check the IDs and GST', state: lines.length ? 'done' : 'failed', result: lines.length ? lines.length - 1 + ' checked' : 'No GSTIN, PAN, IFSC or GST sum found in the message.' }); if (lines.length) { res.context.push('GST and ID checks:\n' + lines.join('\n')); res.direct.push(lines.map(l => '- ' + l).join('\n')); } }
-      if (p.tool === 'tables') { const id = uid('act'), r = tableTool(p.q, files); act({ id, kind: 'tool', tool: 'tables', label: 'Read the table', state: r.error ? 'failed' : 'done', result: r.error || 'Worked out from the file' }); if (r.error) res.stopped = r.error; else { res.context.push('From the attached table:\n' + r.text); res.direct.push(r.text); } }
+      if (p.tool === 'tables') { const id = uid('act'), r = tableTool(p.q, files); act({ id, kind: 'tool', tool: 'tables', label: 'Read the table', state: r.error ? 'failed' : 'done', result: r.error || 'Worked out from the file' }); if (r.error && r.ask && r.ask.options.length) res.ask = r.ask; else if (r.error) res.stopped = r.error; else { res.context.push('From the attached table:\n' + r.text); res.direct.push(r.text); } }
       if (p.tool === 'mcp') {
         const id = uid('act');
         const hit = p.hit || (p.serverId && (() => { const m = db.mcp.find(x => x.id === p.serverId), t = m && m.tools.find(x => x.name === p.name); return m && t ? { m, t } : null; })());
@@ -353,6 +353,8 @@ module.exports = function install(ctx) {
         } catch (e) { act({ ...row, state: 'failed', result: e.message }); res.stopped = `${hit.m.name} could not be reached: ${e.message}`; }
       }
       if (p.tool === 'browser' || p.tool === 'screen') {
+        const sites = (db.app.config.tools.sites || []).slice(0, 3);
+        if (!p.steps.length && sites.length) { res.ask = { question: 'Which site should I open?', options: sites.map(h => ({ label: h, send: `/${p.tool === 'screen' ? 'screen open' : 'browse'} https://${h}` })) }; continue; }
         if (!p.steps.length) { act({ id: uid('act'), kind: 'tool', tool: p.tool, label: 'Browser', state: 'failed', result: 'Give an address to open, for example: /browse https://intranet/prices find the bolt rate' }); continue; }
         const r = await runBrowser(chat, p.steps, act, { screen: p.tool === 'screen', approved: p.approved, signin: p.signin });
         if (r.interrupt) { res.interrupt = r.interrupt; break; }

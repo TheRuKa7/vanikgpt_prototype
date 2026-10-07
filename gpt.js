@@ -3,12 +3,13 @@ import { navToggle, S, $, esc, icon, info, chip, initials, go, bytes, ago, api, 
 import { osShell, uploadFiles } from './os.js';
 
 const G = { chat: null, chatId: null, streaming: null, draftText: '', newOpts: { model: null, sources: 'all', assistantId: null, effort: 'balanced' }, slashOpen: false, listening: false, rec: null, catalog: null, search: '', searchRes: null, toBottom: false, focus: false, editOf: null, shared: null, sharedKey: '', docs: {}, doc: null, docKey: '', colDocs: {}, hitKey: '' };
-export const gptRouteChanged = () => { G.hitKey = ''; };
+export const gptRouteChanged = () => { G.hitKey = ''; const c = G.chat; if (c && c.temp && location.hash !== '#/gpt/c/' + c.id) api('DELETE', '/api/chats/' + c.id).catch(() => {}); };
+export const sendText = async text => { G.draftText = text; await acts.send(); };
 
 // ---------- markdown (small, safe subset)
 function md(src) {
   const blocks = [];
-  const s = String(src || '').replace(/```\w*\n?([\s\S]*?)(```|$)/g, (_, code) => { blocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`); return `\n\u0000${blocks.length - 1}\u0000\n`; });
+  const s = String(src || '').replace(/```(\w*)\n?([\s\S]*?)(```|$)/g, (_, lang, code) => { const pre = `<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`; blocks.push(/^py(thon)?$/i.test(lang) ? `<div class="pyblock">${pre}<div class="row"><button class="btn ghost" data-act="py-run">${icon('play_arrow')}Run</button><span class="small faint">Runs in your browser</span></div><pre class="out" hidden></pre></div>` : pre); return `\n\u0000${blocks.length - 1}\u0000\n`; });
   const inline = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a class="ext" href="$2" target="_blank" rel="noopener">$1</a>').replace(/\[(\d{1,2})\]/g, '<a class="cite" data-act="cite" data-n="$1" role="button">$1</a>');
   const LI = /^\s*([-*•]|\d+[.)])\s+/, lines = s.split('\n');
@@ -51,6 +52,7 @@ export function gptShell(active, content) {
     <a class="nav-item ${active === 'flows' ? 'is-active' : ''}" href="#/gpt/flows">${icon('fact_check')}Workflows</a>
     <a class="nav-item ${active === 'assistants' ? 'is-active' : ''}" href="#/gpt/assistants">${icon('smart_toy')}Agents</a>
     <a class="nav-item ${active === 'knowledge' ? 'is-active' : ''}" href="#/gpt/knowledge">${icon('library_books')}Knowledge</a>
+    <a class="nav-item ${active === 'library' ? 'is-active' : ''}" href="#/gpt/library">${icon('inventory_2')}Library</a>
     <a class="nav-item ${active === 'tasks' ? 'is-active' : ''}" href="#/gpt/tasks">${icon('task_alt')}<span class="grow">Tasks</span>${B.openTasks ? `<span class="count">${B.openTasks}</span>` : ''}</a>
     <div class="row" style="border-top:1px solid var(--vnk-border);padding-top:10px;margin-top:8px">${userButton()}<span class="right">${themeButton()}</span></div>
   </aside><div class="gpt-main">${content}</div></div>`;
@@ -225,6 +227,7 @@ async function stream(chat, body, route = 'messages') {
   G.streaming = null; G.toBottom = true; G.focus = true;
   await refresh();
 }
+acts['temp-toggle'] = () => { G.newOpts.temp = !G.newOpts.temp; rerender(); };
 acts.send = async el => {
   if (G.streaming) return;
   const text = (el && el.dataset.text) || G.draftText.trim();
@@ -285,12 +288,13 @@ function msgHtml(m, last, readOnly) {
   if (m.role === 'user') return `<div class="msg user"><div class="bubble">${esc(m.content)}</div>${m.pii && m.pii.length ? `<div class="under"><span class="chip ${m.piiMode === 'mask' ? 'ok' : 'warn'} tip-left" tabindex="0" data-tip="${m.piiMode === 'mask' ? 'These were replaced before the question reached the model or was saved.' : 'Your admin has chosen to flag personal data. The question was sent as typed.'}">${icon('shield')}${m.piiMode === 'mask' ? 'Masked' : 'Contains'}: ${esc(m.pii.join(', '))}</span></div>` : ''}${readOnly ? '' : `<div class="under"><button class="icon-btn sm edit tip-left" data-act="msg-edit" data-id="${m.id}" data-tip="Edit and ask again" aria-label="Edit and ask again">${icon('edit')}</button></div>`}</div>`;
   if (m.mode === 'blocked') return `<div class="msg bot" data-mid="${m.id}"><span class="app-ico">${icon('forum')}</span><div class="body"><div class="note">${icon('block')}<span>This question touches a topic your admin has blocked. It was not answered and was not sent to the model.</span></div></div></div>`;
   const cites = m.mode === 'unavailable' ? [] : shownCites(m), secs = m.ms ? (m.ms / 1000).toFixed(1) + ' s' : '';
+  const askCard = !m.ask ? '' : last && !readOnly ? `<div class="opts" style="max-width:420px;margin:4px 0 10px">${m.ask.options.map(o => `<button class="opt" data-act="ask-pick" data-send="${esc(o.send)}"><span class="grow"><b>${esc(o.label)}</b></span>${icon('arrow_forward')}</button>`).join('')}<span class="small faint">Or type your own answer below.</span></div>` : '';
   const waiting = m.interrupt && !readOnly && G.chat && G.chat.pending && G.chat.pending.id === m.interrupt.id;
   const gate = !m.interrupt ? '' : waiting ? `<div class="card gate"><div class="row" style="align-items:flex-start">${icon(m.interrupt.kind === 'otp' ? 'pin' : m.interrupt.kind === 'signin' ? 'lock' : 'pan_tool')}<div class="grow"><b>${m.interrupt.kind === 'otp' || m.interrupt.kind === 'signin' ? '' : 'The agent wants to: '}${esc(m.interrupt.reason)}</b><div class="small muted">${esc(m.interrupt.detail || '')}${S.boot.sample && m.interrupt.kind === 'otp' ? ' On the sample portal any 6 digits work.' : ''}</div></div></div><div class="row wrap" style="margin-top:12px">${m.interrupt.kind === 'otp' ? `<input class="input" id="int-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6 digit code" aria-label="One-time code" style="width:150px">` : ''}<button class="btn" data-act="int-allow">${m.interrupt.kind === 'otp' ? 'Continue' : m.interrupt.kind === 'signin' ? 'I have signed in' : 'Allow once'}</button><button class="btn ghost" data-act="int-deny">${m.interrupt.kind === 'step' || !m.interrupt.kind ? 'Do not allow' : 'Stop'}</button></div></div>` : `<p class="small faint">Asked for a go-ahead: ${esc(m.interrupt.reason)}. No longer waiting.</p>`;
   const toolErr = m.toolError ? `<div class="note">${icon('error_outline')}<span>${esc(m.toolError)}${m.blockedHost && S.boot.admin && !readOnly ? ` <button class="link" data-act="allow-site" data-host="${esc(m.blockedHost)}">Allow ${esc(m.blockedHost)}</button>` : m.blockedHost ? ' An admin can add it in Setup.' : ''}</span></div>` : '';
   const body = m.mode === 'unavailable'
     ? `<div class="note">${icon('error_outline')}<span>The model could not be reached and nothing in your documents matches this question.${S.boot.admin ? ` <a class="link" href="#/os/apps/vanikgpt/overview">Check VanikGPT health</a>` : ' Try again in a bit, or tell your admin.'}</span></div>`
-    : `${activityHtml(m.activity)}${toolErr}${m.notice ? `<div class="note">${icon('info_outline')}<span>${NOTE[m.notice]}</span></div>` : ''}${m.content ? `<div class="md">${md(m.content)}</div>` : ''}${gate}${m.stopped ? `<p class="small faint">Stopped.</p>` : ''}`;
+    : `${activityHtml(m.activity)}${toolErr}${m.notice ? `<div class="note">${icon('info_outline')}<span>${NOTE[m.notice]}</span></div>` : ''}${m.content ? `<div class="md">${md(m.content)}</div>` : ''}${askCard}${gate}${m.stopped ? `<p class="small faint">Stopped.</p>` : ''}`;
   return `<div class="msg bot" data-mid="${m.id}"><span class="app-ico">${icon('forum')}</span><div class="body">${body}
     ${cites.length ? `<div class="sources">${cites.map(c => `<a class="source" href="#/gpt/source/${c.docId}/${c.chunkId}/${G.chat ? G.chat.id : 'x'}" title="${esc(c.snippet)}"><b>${c.n}</b><span class="ellipsis">${esc(c.docName)}${c.page ? ' · p. ' + c.page : ''}</span></a>`).join('')}</div>` : ''}
     ${readOnly ? '' : `<div class="msg-actions">
@@ -308,7 +312,7 @@ export const chatNow = () => G.chat;
 acts['msg-details'] = el => {
   const m = findMsg(el.dataset.id), b = m.budget, c = m.citations || [], VIA = { keyword: 'Keyword', meaning: 'Meaning', both: 'Keyword and meaning' };
   const parts = b ? [['Instructions', b.system, '#8a8b84'], ['Sources', b.passages, '#1fa350'], ['Earlier messages', b.history, '#3b6fd6'], ['Kept for the answer', b.output, '#c79a2b']] : [];
-  modal({ title: 'How this answer was made', wide: true, cancel: 'Close', body: `<dl class="kv"><dt>Written by</dt><dd>${m.mode === 'model' ? esc(m.model) : m.mode === 'tool' ? 'Plugins, without the model' : m.mode === 'search' ? 'Search only: passages, no written answer' : 'Built from matching passages, without the model'}</dd><dt>Effort</dt><dd>${EFFORT[m.effort || 'balanced'][0]}</dd>${(m.activity || []).length ? `<dt>Steps</dt><dd>${m.activity.map(a => esc(a.label)).join(' → ')}</dd>` : ''}<dt>Time</dt><dd>${m.ms ? (m.ms / 1000).toFixed(1) + ' s' : 'Not recorded'}</dd><dt>Size</dt><dd>${(m.tokensIn || 0).toLocaleString()} tokens in, ${(m.tokensOut || 0).toLocaleString()} out</dd></dl>
+  modal({ title: 'How this answer was made', wide: true, cancel: 'Close', body: `<dl class="kv"><dt>Written by</dt><dd>${m.mode === 'model' ? esc(m.model) : m.mode === 'tool' ? 'Plugins, without the model' : m.mode === 'search' ? 'Search only: passages, no written answer' : 'Built from matching passages, without the model'}</dd><dt>Effort</dt><dd>${EFFORT[m.effort || 'balanced'][0]}</dd>${m.rules || m.memories ? `<dt>Also given</dt><dd>${[m.rules && 'House rules from your admin', m.memories && `${m.memories} ${m.memories === 1 ? 'thing' : 'things'} you asked it to remember`].filter(Boolean).join(' · ')}</dd>` : ''}${(m.activity || []).length ? `<dt>Steps</dt><dd>${m.activity.map(a => esc(a.label)).join(' → ')}</dd>` : ''}<dt>Time</dt><dd>${m.ms ? (m.ms / 1000).toFixed(1) + ' s' : 'Not recorded'}</dd><dt>Size</dt><dd>${(m.tokensIn || 0).toLocaleString()} tokens in, ${(m.tokensOut || 0).toLocaleString()} out</dd></dl>
     ${c.length ? `<h3 style="margin:18px 0 8px">Passages it was given</h3>${c.map(x => `<div class="set-row"><b class="cite" style="cursor:default">${x.n}</b><div class="grow"><div class="ellipsis">${esc(x.docName)}${x.page ? ' · page ' + x.page : ''}</div><div class="small muted">${esc(x.snippet.slice(0, 110))}…</div></div>${chip(VIA[x.via] || 'Keyword', 'line', false)}${chip(x.strength || 'Good', x.strength === 'Strong' ? 'ok' : x.strength === 'Weak' ? 'warn' : '', false)}</div>`).join('')}` : `<p class="muted" style="margin-top:16px">No passage from your documents matched this question.</p>`}
     ${b ? `<h3 style="margin:18px 0 8px">Room used in the model's memory ${info('The model can read ' + b.context.toLocaleString() + ' tokens at once. Half is kept for sources, a quarter for earlier messages.')}</h3><div class="budget">${parts.map(p => `<i style="width:${Math.max(0.5, 100 * p[1] / b.context)}%;background:${p[2]}"></i>`).join('')}</div><div class="legend">${parts.map(p => `<span style="--c:${p[2]}">${p[0]} ${p[1].toLocaleString()}</span>`).join('')}</div>${b.summarized ? `<p class="small muted" style="margin-top:10px">${b.summarized} earlier messages were folded into a short summary to save room.</p>` : ''}` : ''}` });
 };
@@ -335,7 +339,7 @@ function pageNew(assistantId) {
   G.chat = null; G.chatId = null; G.newOpts.assistantId = assistantId && assistantOf(assistantId) ? assistantId : null;
   const as = assistantOf(G.newOpts.assistantId), shared = B.assistants.slice(0, 4);
   G.focus = true;
-  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="grow">${as ? esc(as.name) : 'New chat'}</h3>${as ? `<a class="btn text" href="#/gpt">${icon('close')}Leave agent</a>` : ''}</div>
+  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="grow">${as ? esc(as.name) : 'New chat'}</h3><button class="icon-btn tip-down tip-left ${G.newOpts.temp ? 'on' : ''}" data-act="temp-toggle" data-tip="${G.newOpts.temp ? 'Temporary chat is on: nothing is kept' : 'Temporary chat: not saved, gone when you leave'}" aria-label="Temporary chat" aria-pressed="${!!G.newOpts.temp}">${icon('history_toggle_off')}</button>${as ? `<a class="btn text" href="#/gpt">${icon('close')}Leave agent</a>` : ''}</div>
     <div class="scroll" id="scroll" style="display:flex;flex-direction:column"><div class="hero">
       <h1>${as ? esc(as.name) : 'What do you want to know?'}</h1>${as && as.description ? `<p class="muted" style="text-align:center;margin:-14px 24px 22px">${esc(as.description)}</p>` : ''}
       ${composer()}
@@ -349,7 +353,7 @@ function pageChat(id) {
   if (!c) return gptShell('', `<div class="gpt-top">${navToggle()}<h3>&nbsp;</h3></div><div class="scroll" id="scroll"></div>`);
   const as = assistantOf(c.assistantId), st = G.streaming && G.streaming.chatId === c.id ? G.streaming : null;
   const lastBot = [...c.messages].reverse().find(m => m.role === 'assistant');
-  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="ellipsis grow">${esc(c.title)}</h3>${as ? chip(as.name, 'line', false) : ''}${c.shared ? `<button class="chip ok tip-down tip-left" data-act="share-copy" data-id="${c.id}" data-tip="Anyone with VanikGPT can read this chat with the link. Click to copy it.">${icon('group')}Shared</button>` : ''}<button class="icon-btn" data-act="chat-menu" data-id="${c.id}" aria-label="Chat options">${icon('more_horiz')}</button></div>
+  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="ellipsis grow">${esc(c.title)}</h3>${c.temp ? chip('Temporary', 'warn', false) : ''}${as ? chip(as.name, 'line', false) : ''}${c.shared ? `<button class="chip ok tip-down tip-left" data-act="share-copy" data-id="${c.id}" data-tip="Anyone with VanikGPT can read this chat with the link. Click to copy it.">${icon('group')}Shared</button>` : ''}<button class="icon-btn" data-act="chat-menu" data-id="${c.id}" aria-label="Chat options">${icon('more_horiz')}</button></div>
     <div class="scroll" id="scroll"><div class="thread">
       ${c.messages.map(m => msgHtml(m, !st && lastBot && m.id === lastBot.id)).join('')}
       ${st && st.userText ? `<div class="msg user"><div class="bubble">${esc(st.userText)}</div></div>` : ''}
