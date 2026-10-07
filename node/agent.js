@@ -40,7 +40,7 @@ function calc(src) {
 const fmt = n => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 6 });
 
 module.exports = function install(ctx) {
-  const { db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff } = ctx;
+  const { db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff } = ctx, SAMPLE = require('./sample');
   const C36 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const gstinOk = g => { let s = 0; for (let i = 0; i < 14; i++) { const p = C36.indexOf(g[i]) * (i % 2 ? 2 : 1); s += Math.floor(p / 36) + p % 36; } return C36[(36 - s % 36) % 36] === g[14]; };
   const STATES = { '07': 'Delhi', '09': 'Uttar Pradesh', '27': 'Maharashtra', '29': 'Karnataka', '33': 'Tamil Nadu', '24': 'Gujarat', '19': 'West Bengal', '36': 'Telangana', '06': 'Haryana', '08': 'Rajasthan' };
@@ -96,7 +96,7 @@ module.exports = function install(ctx) {
         return { url: location.href, title: document.title, text: (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 12000),
           elements: window.__vnk.map((e, i) => { const r = e.getBoundingClientRect(); return { i, tag: e.tagName.toLowerCase(), type: e.type || '', label: lab(e), href: e.href || '', x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), submit: e.type === 'submit' || (e.tagName === 'BUTTON' && !!e.form && e.type !== 'button') }; }),
           tables: [...document.querySelectorAll('table')].slice(0, 4).map(t => [...t.rows].slice(0, 40).map(r => [...r.cells].map(c => c.innerText.trim()))),
-          password: !!document.querySelector('input[type=password]'), captcha: !!document.querySelector('iframe[src*=captcha],[class*=captcha],[id*=captcha]') || /verify you are (a )?human|i.m not a robot/i.test(document.body ? document.body.innerText : '') }; })()`);
+          password: !!document.querySelector('input[type=password]'), otp: !!document.querySelector('input[autocomplete=one-time-code]') || /verification code|one.time (code|password)|enter the code/i.test(document.body ? document.body.innerText.slice(0, 4000) : ''), captcha: !!document.querySelector('iframe[src*=captcha],[class*=captcha],[id*=captcha]') || /verify you are (a )?human|i.m not a robot/i.test(document.body ? document.body.innerText : '') }; })()`);
     }
     async click(i) { const p = this.settle(); await this.js(`(() => { const e = window.__vnk[${+i}]; e.scrollIntoView({ block: 'center' }); e.click(); })()`); await Promise.race([p, sleep(1200)]); }
     async type(i, text) { await this.js(`(() => { const e = window.__vnk[${+i}]; e.scrollIntoView({ block: 'center' }); e.focus(); if ('value' in e) e.value = ''; })()`); await this.cmd('Input.insertText', { text }); await this.js(`(() => { const e = window.__vnk[${+i}]; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`); }
@@ -109,8 +109,9 @@ module.exports = function install(ctx) {
     close() { this.dead = true; try { this.ws && this.ws.close(); } catch { /* gone */ } try { this.proc && this.proc.kill(); } catch { /* gone */ } setTimeout(() => { try { fs.rmSync(this.dir, { recursive: true, force: true }); } catch { /* in use */ } }, 1500).unref(); }
   }
   const sessions = new Map(); let shared = null, idleT = null;
-  async function session(chatId) {
+  async function session(chatId, sim) {
     let s = sessions.get(chatId);
+    if (!s && sim) { s = { b: new SAMPLE.SimTab() }; sessions.set(chatId, s); } // the sample portal is drawn, so it needs no browser
     if (!s) {
       clearTimeout(idleT);
       if (!shared || shared.dead) { try { shared = await Browser.launch(); } catch (e) { if (/No browser/.test(e.message)) throw e; shared = await Browser.launch(); } }
@@ -151,10 +152,36 @@ module.exports = function install(ctx) {
   const describe = s => ({ goto: `Open ${s.url}`, click: `Click "${s.label}"`, clickAt: `Click at ${s.x}, ${s.y}`, type: `Type into "${s.label}"`, typeRaw: 'Type text', key: `Press ${s.key}`, scroll: s.dy > 0 ? 'Scroll down' : 'Scroll up', shot: 'Take a screenshot', read: s.question ? `Read the page for: ${s.question}` : 'Read the page' }[s.do]);
   const findEl = (snap, label, kinds) => { const L = label.toLowerCase(), c = snap.elements.filter(e => !kinds || kinds.includes(e.tag)); return c.find(e => e.label.toLowerCase() === L) || c.find(e => e.label.toLowerCase().includes(L)) || null; };
 
+  // Sites that ask for a sign-in. The agent never types a password and never sees one.
+  //  - Company SSO saved for the site: the appliance presses the SSO button; the browser profile holds the company session.
+  //  - Account saved for the site: the appliance fills it from its vault, outside the model. (This build keeps no passwords, so that works on the sample portal only.)
+  //  - A one-time code: the run stops and asks the person for it.
+  //  - Anything else, and every human check: the run stops and a person signs in.
+  const SSO = /(continue|sign in|log in|login) with|single sign|\bsso\b/i;
+  const isLogin = snap => !!(snap.password || snap.otp || snap.elements.some(e => SSO.test(e.label) && /sign.?in|log.?in|auth|sso/i.test(snap.url + ' ' + snap.title)));
+  async function passWall(b, snap, opts, note) {
+    const host = hostOf(snap.url), saved = (db.app.config.tools.signins || []).find(x => host === x.host || host.endsWith('.' + x.host)), si = opts.signin || {};
+    const ask = (kind, reason, detail) => ({ interrupt: { id: uid('int'), kind, reason, detail } });
+    const code = async () => {
+      if (si.kind !== 'otp' || !si.code) return ask('otp', `Enter the one-time code for ${host}`, 'The site sent a code to the account holder. Type it here and the run carries on. The code is used once and not kept.');
+      let okay; if (b.sim) okay = await b.enterOtp(si.code); else { const e = snap.elements.find(x => x.tag === 'input' && x.type !== 'password' && x.type !== 'hidden'); if (!e) return { stopped: 'There is no box for the code on this page.' }; await b.type(e.i, si.code); await b.key('enter'); okay = !(await b.snapshot()).otp; }
+      si.code = '';
+      if (!okay) return ask('otp', `That code was not accepted by ${host}`, 'Ask for a new code and type it here.');
+      await note('Enter the one-time code', 'Accepted'); return {};
+    };
+    if (si.kind === 'signin') { if (!b.sim) return { stopped: `${host} is still asking for a sign-in. Taking over the browser window is not in this build. Ask an admin to save a sign-in for this site in VanikGPT setup.` }; await b.personSignedIn(); await note('Sign-in', 'Done by you. The agent did not see the password.'); return {}; }
+    if (snap.otp && !snap.password) return code();
+    const sso = saved && saved.kind === 'sso' && snap.elements.find(e => SSO.test(e.label));
+    if (sso) { if (b.sim) b.account = saved.account; await b.click(sso.i); const after = await b.snapshot(); if (after.otp) { snap = after; return code(); } if (!isLogin(after)) { await note('Sign in with company SSO', saved.account ? 'As ' + saved.account : 'Company session used'); return {}; } }
+    if (saved && saved.kind === 'vault' && snap.password && b.sim) { await b.vaultSignIn(saved.account); await note('Sign in with the saved account', `${saved.account || 'Saved account'}. Filled by the appliance, not shown to the model.`); snap = await b.snapshot(); if (snap.otp) return code(); if (!isLogin(snap)) return {}; }
+    return ask('signin', `Sign in to ${host}`, saved && saved.kind === 'vault' && !b.sim ? 'This build keeps no passwords, so the saved account cannot be used here. Sign in yourself, then carry on.' : 'This site asks for a sign-in. The agent never types a password. Sign in yourself, or ask an admin to save a sign-in for this site.');
+  }
+
   // Runs browser steps. Returns { text, tables, url, interrupt?, stopped? }. Emits one activity row per step with a screenshot.
   async function runBrowser(chat, steps, act, opts = {}) {
     const out = { notes: [], tables: [], url: '' };
-    let b; try { b = await session(chat.id); } catch (e) { return { ...out, stopped: e.message }; }
+    const first = steps.find(s => s.do === 'goto');
+    let b; try { b = await session(chat.id, !!first && hostOf(first.url) === SAMPLE.HOST); } catch (e) { return { ...out, stopped: `No browser could be started here (${e.message.replace(/\.$/, '')}). The sample supplier portal still works: /browse https://${SAMPLE.HOST}/prices` }; }
     for (let n = 0; n < steps.length; n++) {
       const s = steps[n], id = uid('act'), row = { id, kind: 'tool', tool: opts.screen ? 'screen' : 'browser', label: describe(s), state: 'running' };
       act(row);
@@ -171,19 +198,27 @@ module.exports = function install(ctx) {
         if (s.do === 'click') {
           const e = findEl(snap, s.label); if (!e) return fail(`Nothing on the page is labelled "${s.label}".`);
           if ((RISKY.test(e.label) || e.submit) && !(opts.approved && n === 0)) { act({ ...row, state: 'waiting', result: 'Waiting for your go-ahead' }); return { ...out, interrupt: { id: uid('int'), reason: `Click "${e.label}" on ${hostOf(snap.url)}`, detail: 'This looks like a step that submits, sends, pays or signs in.', rest: steps.slice(n), screen: !!opts.screen } }; }
-          await b.click(e.i);
+          row.at = [e.x, e.y]; await b.click(e.i);
         } else if (s.do === 'type') {
           const e = findEl(snap, s.label, ['input', 'textarea', 'select']); if (!e) return fail(`There is no box labelled "${s.label}".`);
           if (e.type === 'password') return fail('The agent never types passwords. Sign in yourself, then ask again.');
-          await b.type(e.i, s.text);
+          row.at = [e.x, e.y]; await b.type(e.i, s.text);
         } else if (s.do === 'typeRaw') { if (snap.password) return fail('The agent never types on a page with a password box.'); await b.typeRaw(s.text); }
         else if (s.do === 'key') await b.key(s.key);
         else if (s.do === 'clickAt') {
           const e = snap.elements.find(x => Math.abs(x.x - s.x) < 40 && Math.abs(x.y - s.y) < 16);
           if (e && (RISKY.test(e.label) || e.submit) && !(opts.approved && n === 0)) { act({ ...row, state: 'waiting', result: 'Waiting for your go-ahead' }); return { ...out, interrupt: { id: uid('int'), reason: `Click "${e.label}" at ${s.x}, ${s.y} on ${hostOf(snap.url)}`, detail: 'This looks like a step that submits, sends, pays or signs in.', rest: steps.slice(n), screen: true } }; }
-          await b.clickAt(s.x, s.y);
+          row.at = [s.x, s.y]; await b.clickAt(s.x, s.y);
         } else if (s.do === 'scroll') await b.scroll(s.dy);
         snap = await b.snapshot(); out.url = snap.url;
+        if (s.do === 'goto' && isLogin(snap) && snap.url.split(/[?#]/)[0] !== s.url.split(/[?#]/)[0]) { // bounced to a sign-in page
+          const note = async (label, result) => act({ id: uid('act'), kind: 'tool', tool: row.tool, label, state: 'done', result, url: (await b.snapshot()).url, shot: await b.shot() });
+          const w = await passWall(b, snap, opts, note);
+          if (w.stopped) return fail(w.stopped);
+          if (w.interrupt) { act({ ...row, state: 'waiting', result: 'Waiting for you', url: snap.url, shot: await b.shot() }); return { ...out, interrupt: { ...w.interrupt, rest: steps.slice(n), screen: !!opts.screen } }; }
+          opts.signin = null; await b.goto(s.url); snap = await b.snapshot(); out.url = snap.url;
+          if (isLogin(snap)) return fail('The site did not accept the sign-in.');
+        }
         const h = hostOf(snap.url);
         if (h && !siteAllowed(h)) { await b.goto('about:blank'); return { ...fail(`That step led to ${h}, which is not on the list of allowed sites. The page was closed.`), blockedHost: h }; }
         let result = snap.title || snap.url;
@@ -237,6 +272,7 @@ module.exports = function install(ctx) {
 
   // ---------- tool connectors: any server that speaks the Model Context Protocol over HTTP
   async function mcpCall(srv, method, params, notify) {
+    if (srv.url.startsWith('sample://')) return notify ? null : SAMPLE.mcp(method, params);
     const r = await fetch(srv.url, { method: 'POST', signal: AbortSignal.timeout(20000), headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(srv.token ? { Authorization: 'Bearer ' + srv.token } : {}), ...(srv.sessionId ? { 'Mcp-Session-Id': srv.sessionId } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', ...(notify ? {} : { id: Date.now() }), method, params }) });
     const sid = r.headers.get('mcp-session-id'); if (sid) srv.sessionId = sid;
     if (notify) return null;
@@ -259,7 +295,7 @@ module.exports = function install(ctx) {
   on('POST', '/api/mcp', async ({ u, body }) => {
     const url = String(body.url || '').trim(), name = String(body.name || '').trim().slice(0, 40);
     if (!name) throw err(400, 'Give the connector a name.');
-    if (!/^https?:\/\/[^\s]+$/i.test(url)) throw err(400, 'Enter a full address that starts with http:// or https://.');
+    if (!/^(https?:\/\/[^\s]+|sample:\/\/erp)$/i.test(url)) throw err(400, 'Enter a full address that starts with http:// or https://.');
     const srv = { id: uid('mcp'), name, url, token: String(body.token || '').trim(), tools: [], createdAt: now(), createdBy: u.name };
     try { await mcpConnect(srv); } catch (e) { throw err(400, 'Could not connect: ' + e.message); }
     db.mcp.push(srv); audit(u, 'Added a tool connector', name, srv.tools.length + ' tools'); return mcpView(srv);
@@ -295,9 +331,9 @@ module.exports = function install(ctx) {
     const res = { context: [], direct: [] };
     const act = row => act0(shorten && row.result ? { ...row, result: shorten(row.result), label: shorten(row.label) } : row);
     const files = ctx.chatTables(chat);
-    const plan = resume ? (resume.call ? [{ tool: 'mcp', ...resume.call, approved: true }] : [{ tool: resume.screen ? 'screen' : 'browser', steps: resume.rest, approved: true }]) : route(text, enabled, forced, files);
+    const plan = resume ? (resume.call ? [{ tool: 'mcp', ...resume.call, approved: true }] : [{ tool: resume.screen ? 'screen' : 'browser', steps: resume.rest, approved: !resume.kind || resume.kind === 'step', signin: resume.kind === 'otp' || resume.kind === 'signin' ? { kind: resume.kind, code: resume.code } : null }]) : route(text, enabled, forced, files);
     for (const p of plan) {
-      if (p.tool === 'calculator') { const id = uid('act'), v = calc(p.expr); act({ id, kind: 'tool', tool: 'calculator', label: 'Work out ' + p.expr, state: 'done', result: fmt(v) }); res.context.push(`Calculator: ${p.expr} = ${fmt(v)}`); res.direct.push(`${p.expr} = **${fmt(v)}**`); }
+      if (p.tool === 'calculator') { const id = uid('act'), v = calc(p.expr); act({ id, kind: 'tool', tool: 'calculator', label: 'Work out ' + p.expr, state: 'done', result: fmt(v) }); res.context.push(`Calculator: ${p.expr} = ${fmt(v)}`); res.direct.push(`${p.expr.replace(/\*/g, '×')} = **${fmt(v)}**`); }
       if (p.tool === 'gst') { const id = uid('act'), lines = gstTool(p.text); act({ id, kind: 'tool', tool: 'gst', label: 'Check the IDs and GST', state: lines.length ? 'done' : 'failed', result: lines.length ? lines.length - 1 + ' checked' : 'No GSTIN, PAN, IFSC or GST sum found in the message.' }); if (lines.length) { res.context.push('GST and ID checks:\n' + lines.join('\n')); res.direct.push(lines.map(l => '- ' + l).join('\n')); } }
       if (p.tool === 'tables') { const id = uid('act'), r = tableTool(p.q, files); act({ id, kind: 'tool', tool: 'tables', label: 'Read the table', state: r.error ? 'failed' : 'done', result: r.error || 'Worked out from the file' }); if (r.error) res.stopped = r.error; else { res.context.push('From the attached table:\n' + r.text); res.direct.push(r.text); } }
       if (p.tool === 'mcp') {
@@ -316,7 +352,7 @@ module.exports = function install(ctx) {
       }
       if (p.tool === 'browser' || p.tool === 'screen') {
         if (!p.steps.length) { act({ id: uid('act'), kind: 'tool', tool: p.tool, label: 'Browser', state: 'failed', result: 'Give an address to open, for example: /browse https://intranet/prices find the bolt rate' }); continue; }
-        const r = await runBrowser(chat, p.steps, act, { screen: p.tool === 'screen', approved: p.approved });
+        const r = await runBrowser(chat, p.steps, act, { screen: p.tool === 'screen', approved: p.approved, signin: p.signin });
         if (r.interrupt) { res.interrupt = r.interrupt; break; }
         if (r.stopped) { res.stopped = r.stopped; res.blockedHost = r.blockedHost; }
         for (const n of r.notes) { res.context.push(`From the web page ${n.url} ("${n.title}"):\n${n.text}`); res.direct.push(`From **${n.title || n.url}** (${n.url}):\n\n${n.text}`); }

@@ -3,9 +3,10 @@
 A click-through preview of VanikGPT as an app inside Vanik OS.
 
 - Everything runs in your browser. The server is a service worker and data is kept in this browser only.
-- No model is connected, so answers are built from the documents you add and say so. Plugins (calculator, GST checks, tables) and the three document checks work fully.
-- The Browser and Computer plugins, folder connector and tool connectors need a real machine and are not available in this preview.
-- Sample files to upload are in `samples/`.
+- It opens on a sample workspace: three knowledge collections, four agents, four finished chats, workflow runs, an API key, a webhook, a watched folder and an ERP tool connector.
+- No model is connected. The sample chats show written answers; new questions are answered straight from the documents and say so.
+- The Browser and Computer plugins drive a sample supplier portal (https://supplier-portal.example) that is drawn, not fetched. Open a run's picture to replay it step by step.
+- The folder, ERP and webhook addresses that start with `sample://` are stand-ins that behave like the real thing.
 - To start again, clear this site's data in the browser.
 
-Start: pick the owner account, then Apps, Install VanikGPT, Save and deploy, Open VanikGPT.
+Start: pick the owner account, then open VanikGPT and the chats on the left.

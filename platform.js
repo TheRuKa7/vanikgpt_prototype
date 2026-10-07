@@ -2,7 +2,7 @@
 import { S, $, esc, icon, info, chip, go, ago, when, api, refresh, rerender, acts, toast, modal, confirmBox, downloadText } from './core.js';
 import { osShell } from './os.js';
 
-const P = { data: null, mcp: null, key: '', timer: null, tab: 'keys', play: { text: '', out: '', busy: false, model: '' } };
+const P = { data: null, mcp: null, key: '', timer: null, tab: 'keys', play: { text: '', out: '', busy: false, model: '', ctx: false } };
 export const platformRouteChanged = () => { P.key = ''; clearInterval(P.timer); P.timer = null; };
 async function loadPlatform() { [P.data, P.mcp] = await Promise.all([api('GET', '/api/platform'), api('GET', '/api/mcp')]); }
 function ensure(key, live) {
@@ -77,7 +77,7 @@ function pageGateway(tab) {
     const chat = serving.filter(m => m.kind === 'chat'); if (!P.play.model && chat[0]) P.play.model = chat[0].id;
     body = `<div class="card" style="max-width:820px"><div class="card-head"><h3>Try a request</h3>${info('Sends one chat request through the gateway as you, without a key.')}<select class="input right" style="width:240px" data-change="play-model">${chat.map(m => `<option ${m.id === P.play.model ? 'selected' : ''}>${esc(m.id)}</option>`).join('') || '<option>No model serving</option>'}</select></div>
       <textarea class="input" rows="4" id="play-text" placeholder="Write a message">${esc(P.play.text)}</textarea>
-      <div class="row" style="margin-top:12px"><button class="btn" data-act="play-send" ${P.play.busy || !chat.length ? 'disabled' : ''}>${P.play.busy ? 'Waiting…' : 'Send'}</button><span class="small muted">POST ${esc(base)}/chat/completions</span></div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-act="play-send" ${P.play.busy || !chat.length ? 'disabled' : ''}>${P.play.busy ? 'Waiting…' : 'Send'}</button><span class="small muted grow ellipsis">POST ${esc(base)}/chat/completions</span><span class="small">Use the knowledge base ${info('Adds matching passages from your collections before the model answers. Sent as "use_context": true.')}</span><button class="switch ${P.play.ctx ? 'on' : ''}" role="switch" aria-checked="${P.play.ctx}" aria-label="Use the knowledge base" data-act="play-ctx"></button></div>
       ${P.play.out ? `<pre class="code" style="margin-top:14px;white-space:pre-wrap" id="play-out">${esc(P.play.out)}</pre>` : ''}</div>`;
   }
   if (D && tab === 'webhooks') {
@@ -97,7 +97,7 @@ acts['key-new'] = () => modal({ title: 'Create API key', body: `<div class="stac
 acts['key-revoke'] = el => confirmBox(`Revoke "${el.dataset.name}"?`, 'Anything using this key stops working straight away. This cannot be undone.', 'Revoke', async () => { await api('DELETE', '/api/gateway/keys/' + el.dataset.id); await reload(); });
 acts['hook-new'] = () => {
   const ev = P.data.events;
-  modal({ title: 'Add webhook', wide: true, body: `<div class="stack"><label class="field"><span>Address</span><input class="input" id="f-url" placeholder="https://erp.example.com/hooks/vanik"></label><div><div class="small" style="font-weight:600;margin-bottom:8px">Call it when</div><div class="row wrap" style="gap:6px" id="f-events">${ev.map(e => `<button class="tag" data-v="${e}">${e}</button>`).join('')}</div></div></div>`,
+  modal({ title: 'Add webhook', wide: true, body: `<div class="stack"><label class="field"><span>Address</span><input class="input" id="f-url" placeholder="https://erp.example.com/hooks/vanik" value="${S.boot.sample ? 'sample://erp/hooks/vanik' : ''}"></label><div><div class="small" style="font-weight:600;margin-bottom:8px">Call it when</div><div class="row wrap" style="gap:6px" id="f-events">${ev.map(e => `<button class="tag" data-v="${e}">${e}</button>`).join('')}</div></div></div>`,
     actions: [{ label: 'Add', run: async o => { const h = await api('POST', '/api/webhooks', { url: $('#f-url', o).value, events: [...o.querySelectorAll('#f-events .on')].map(b => b.dataset.v) }); await reload(); showSecret('Copy the signing secret now', 'Use it to check the X-Vanik-Signature header. It is not shown again.', h.secret); } }] })
     .el.querySelector('#f-events').onclick = e => { const b = e.target.closest('button'); if (b) b.classList.toggle('on'); };
 };
@@ -106,11 +106,12 @@ acts['hook-test'] = async el => { await api('POST', `/api/webhooks/${el.dataset.
 acts['hook-del'] = el => confirmBox('Remove this webhook?', 'Vanik OS stops calling this address.', 'Remove', async () => { await api('DELETE', '/api/webhooks/' + el.dataset.id); await reload(); });
 import { ins } from './core.js';
 ins['play-model'] = el => { P.play.model = el.value; };
+acts['play-ctx'] = () => { P.play.text = $('#play-text').value; P.play.ctx = !P.play.ctx; rerender(); };
 acts['play-send'] = async () => {
   P.play.text = $('#play-text').value.trim(); if (!P.play.text) return;
   P.play.busy = true; P.play.out = ''; rerender();
   try {
-    const r = await fetch('/gateway/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User': S.userId }, body: JSON.stringify({ model: P.play.model, stream: true, messages: [{ role: 'user', content: P.play.text }] }) });
+    const r = await fetch('/gateway/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User': S.userId }, body: JSON.stringify({ model: P.play.model, stream: true, ...(P.play.ctx ? { use_context: true } : {}), messages: [{ role: 'user', content: P.play.text }] }) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); P.play.out = `${r.status}  ${(j.error && j.error.message) || 'Request failed.'}`; }
     else {
       const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
@@ -139,7 +140,7 @@ function pageConnectors() {
       ${other.map(o => `<div class="card flat app-card" style="min-height:0"><div class="row"><span class="avatar sq">${icon(o[2])}</span><h3 class="grow">${o[0]}</h3>${chip('Not connected', '')}</div><p class="small muted">${o[1]} Needs your tenant's sign in, so it is set up in Vanik OS.</p><div class="foot"><span class="grow"></span><a class="btn ghost" href="https://os.vanikedge.ai/connectors" target="_blank" rel="noopener">Open in Vanik OS ${icon('open_in_new')}</a></div></div>`).join('')}
     </div>`);
 }
-acts['mcp-new'] = () => modal({ title: 'Add a tool connector', text: 'Vanik OS connects, lists the tools and shows them here.', body: `<div class="stack"><label class="field"><span>Name</span><input class="input" id="f-name" maxlength="40" placeholder="ERP"></label><label class="field"><span>Address ${info('The MCP endpoint of the other system, reachable from this appliance.')}</span><input class="input" id="f-url" placeholder="http://erp.internal:8080/mcp"></label><label class="field"><span>Access token ${info('Optional. Sent as a bearer token. Stored on the appliance and never shown again.')}</span><input class="input" id="f-token" autocomplete="off" placeholder="Leave empty if the system needs none"></label></div>`,
+acts['mcp-new'] = () => modal({ title: 'Add a tool connector', text: 'Vanik OS connects, lists the tools and shows them here.', body: `<div class="stack"><label class="field"><span>Name</span><input class="input" id="f-name" maxlength="40" placeholder="ERP"></label><label class="field"><span>Address ${info('The MCP endpoint of the other system, reachable from this appliance.')}</span><input class="input" id="f-url" placeholder="http://erp.internal:8080/mcp" value="${S.boot.sample ? 'sample://erp' : ''}"></label><label class="field"><span>Access token ${info('Optional. Sent as a bearer token. Stored on the appliance and never shown again.')}</span><input class="input" id="f-token" autocomplete="off" placeholder="Leave empty if the system needs none"></label></div>`,
   actions: [{ label: 'Connect', run: async o => { const m = await api('POST', '/api/mcp', { name: $('#f-name', o).value, url: $('#f-url', o).value, token: $('#f-token', o).value }); toast(`Connected. ${m.tools.length} tools found.`); await reload(); } }] });
 acts['mcp-refresh'] = async el => { const m = await api('POST', `/api/mcp/${el.dataset.id}/refresh`); toast(m.error ? 'Not reachable: ' + m.error : `Reachable. ${m.tools.length} tools.`, m.error ? 'err' : ''); await reload(); };
 acts['mcp-ask'] = async el => { await api('PATCH', `/api/mcp/${el.dataset.id}/tools/${encodeURIComponent(el.dataset.tool)}`, { ask: !!el.dataset.on }); await reload(); };
@@ -147,7 +148,7 @@ acts['mcp-del'] = el => confirmBox('Remove this tool connector?', 'Chats can no 
 acts['cn-new'] = () => {
   const cols = S.boot.collections;
   if (!cols.length) return modal({ title: 'Make a collection first', text: 'A folder is copied into a collection. Create one in Knowledge base, then come back.', actions: [{ label: 'Open Knowledge base', run: () => go('#/os/knowledge') }] });
-  modal({ title: 'Connect a folder', body: `<div class="stack"><label class="field"><span>Folder path on the appliance ${info('A local folder or a mounted network share, for example /mnt/finance or D:\\\\Shared\\\\Policies.')}</span><input class="input" id="f-path" placeholder="/mnt/shared/policies"></label>
+  modal({ title: 'Connect a folder', body: `<div class="stack"><label class="field"><span>Folder path on the appliance ${info('A local folder or a mounted network share, for example /mnt/finance or D:\\\\Shared\\\\Policies.')}</span><input class="input" id="f-path" placeholder="/mnt/shared/policies" value="${S.boot.sample ? 'sample://finance-share' : ''}"></label>
     <label class="field"><span>Copy into</span><select class="input" id="f-col">${cols.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
     <label class="field"><span>Check for changes every</span><select class="input" id="f-every"><option value="1">1 minute</option><option value="15" selected>15 minutes</option><option value="60">1 hour</option><option value="1440">1 day</option></select></label></div>`,
     actions: [{ label: 'Connect', run: async o => { const c = await api('POST', '/api/connectors', { path: $('#f-path', o).value, collectionId: $('#f-col', o).value, everyMinutes: +$('#f-every', o).value }); toast(`Connected. ${c.stats ? c.stats.added : 0} files copied in.`); await reload(); } }] });

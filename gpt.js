@@ -236,19 +236,44 @@ acts.send = async el => {
   await stream(c, body);
 };
 acts.stop = () => { if (G.streaming) G.streaming.ctrl.abort(); };
-acts['int-allow'] = async () => { if (G.streaming || !G.chat) return; while (G.chat.messages.length && G.chat.messages[G.chat.messages.length - 1].role === 'assistant') G.chat.messages.pop(); await stream(G.chat, { allow: true }, 'resume'); };
+acts['int-allow'] = async () => { if (G.streaming || !G.chat) return; const box = $('#int-code'), code = box ? box.value.trim() : ''; if (box && !code) { box.focus(); return toast('Type the code first.'); } while (G.chat.messages.length && G.chat.messages[G.chat.messages.length - 1].role === 'assistant') G.chat.messages.pop(); await stream(G.chat, { allow: true, code }, 'resume'); };
 acts['int-deny'] = async () => { if (G.streaming || !G.chat) return; while (G.chat.messages.length && G.chat.messages[G.chat.messages.length - 1].role === 'assistant') G.chat.messages.pop(); await stream(G.chat, { allow: false }, 'resume'); };
 acts['allow-site'] = async el => { await api('POST', '/api/app/allow-site', { host: el.dataset.host }); toast(el.dataset.host + ' is now allowed. Asking again.'); await load(); acts.regen(); };
-acts['shot-open'] = el => modal({ title: 'What the sandboxed browser shows', wide: true, cancel: 'Close', body: `<img src="${el.querySelector('img').src}" alt="Screenshot" style="width:100%;border-radius:10px;border:1px solid var(--vnk-border)"><p class="mono" style="margin-top:8px">${esc(el.dataset.url || '')}</p>` });
+// Replays a browser run step by step: each frame fades in, the tap lands where the agent clicked, the caption says what it did.
+acts['shot-open'] = el => {
+  const fr = FRAMES.get(el.dataset.key) || []; if (!fr.length) return;
+  const many = fr.length > 1; let i = -1, playing = many, t = null;
+  const m = modal({ title: 'What the browser did', wide: true, cancel: 'Close', body: `<div class="replay"><div class="stage"><img alt=""><img alt=""><i class="tap"></i></div>
+    <div class="cap"><span class="num"></span><div class="grow"><b></b><div class="small muted res"></div></div></div><div class="mono ellipsis url"></div>
+    ${many ? `<div class="bar"><button class="icon-btn" data-r="prev" aria-label="Previous step">${icon('skip_previous')}</button><button class="icon-btn bordered" data-r="play" aria-label="Play or pause">${icon('pause')}</button><button class="icon-btn" data-r="next" aria-label="Next step">${icon('skip_next')}</button><div class="segs">${fr.map((_, k) => `<button data-r="go" data-k="${k}" aria-label="Step ${k + 1}"><i></i></button>`).join('')}</div></div>` : ''}</div>` });
+  const o = m.el, imgs = [...o.querySelectorAll('.stage img')], tap = $('.tap', o), q = x => $(x, o);
+  const show = k => {
+    if (!o.isConnected) return;
+    i = (k + fr.length) % fr.length; const f = fr[i], next = imgs[i % 2], prev = imgs[(i + 1) % 2];
+    next.src = f.shot; next.classList.add('on'); prev.classList.remove('on');
+    tap.classList.remove('go'); if (f.at) { tap.style.left = f.at[0] / 10.24 + '%'; tap.style.top = f.at[1] / 6.4 + '%'; void tap.offsetWidth; tap.classList.add('go'); }
+    q('.num').textContent = many ? `${i + 1}/${fr.length}` : ''; q('.cap b').textContent = f.label; q('.res').textContent = f.result || ''; q('.url').textContent = f.url || '';
+    o.querySelectorAll('.segs button').forEach((b, n) => { b.className = n < i ? 'done' : n === i ? (playing ? 'now run' : 'now') : ''; });
+    clearTimeout(t); if (playing) t = setTimeout(() => { if (i === fr.length - 1) { playing = false; q('[data-r=play] .mi').textContent = 'replay'; show(i); } else show(i + 1); }, 1900);
+  };
+  o.addEventListener('click', e => {
+    const b = e.target.closest('[data-r]'); if (!b) return;
+    if (b.dataset.r === 'play') { playing = !playing; q('[data-r=play] .mi').textContent = playing ? 'pause' : 'play_arrow'; show(playing && i === fr.length - 1 ? 0 : i); }
+    else { playing = false; q('[data-r=play] .mi').textContent = 'play_arrow'; show(b.dataset.r === 'go' ? +b.dataset.k : i + (b.dataset.r === 'next' ? 1 : -1)); }
+  });
+  show(many ? 0 : fr.length - 1);
+};
 acts.regen = async () => { if (G.streaming || !G.chat) return; while (G.chat.messages.length && G.chat.messages[G.chat.messages.length - 1].role === 'assistant') G.chat.messages.pop(); await stream(G.chat, { regenerate: true }); };
 
 // ---------- messages
 const TOOL_ICON = { calculator: 'calculate', gst: 'verified', tables: 'table_chart', browser: 'public', screen: 'mouse', connector: 'hub' };
+const FRAMES = new Map();
 function activityHtml(list) {
   if (!list || !list.length) return '';
-  const shot = [...list].reverse().find(a => a.shot);
+  const shot = [...list].reverse().find(a => a.shot), frames = list.filter(a => a.shot);
+  if (shot) FRAMES.set(list[0].id, frames);
   return `<div class="act">${list.map(a => `<div class="act-row ${a.state}"><span class="dot">${a.state === 'done' ? icon('check') : a.state === 'failed' ? icon('close') : a.state === 'waiting' ? icon('pan_tool') : ''}</span>${icon(TOOL_ICON[a.tool] || 'extension')}<span class="grow"><b>${esc(a.label)}</b>${a.result ? `<span class="small muted"> · ${esc(String(a.result).slice(0, 150))}</span>` : ''}</span></div>`).join('')}
-    ${shot ? `<button class="shot" data-act="shot-open" data-url="${esc(shot.url || '')}" aria-label="Open the screenshot"><img src="${shot.shot}" alt="What the sandboxed browser shows"><span class="mono ellipsis">${esc(shot.url || '')}</span></button>` : ''}</div>`;
+    ${shot ? `<button class="shot" data-act="shot-open" data-key="${list[0].id}" aria-label="Replay what the browser did"><img src="${shot.shot}" alt="What the sandboxed browser shows"><span class="row"><span class="mono ellipsis grow">${esc(shot.url || '')}</span>${frames.length > 1 ? `<span class="replay-tag">${icon('play_arrow')}Replay ${frames.length} steps</span>` : ''}</span></button>` : ''}</div>`;
 }
 const NOTE = {
   model_unreachable: 'The model could not be reached, so this answer is built straight from your documents.',
@@ -260,7 +285,7 @@ function msgHtml(m, last, readOnly) {
   if (m.mode === 'blocked') return `<div class="msg bot" data-mid="${m.id}"><span class="app-ico">${icon('forum')}</span><div class="body"><div class="note">${icon('block')}<span>This question touches a topic your admin has blocked. It was not answered and was not sent to the model.</span></div></div></div>`;
   const cites = m.mode === 'unavailable' ? [] : shownCites(m), secs = m.ms ? (m.ms / 1000).toFixed(1) + ' s' : '';
   const waiting = m.interrupt && !readOnly && G.chat && G.chat.pending && G.chat.pending.id === m.interrupt.id;
-  const gate = !m.interrupt ? '' : waiting ? `<div class="card gate"><div class="row">${icon('pan_tool')}<div class="grow"><b>The agent wants to: ${esc(m.interrupt.reason)}</b><div class="small muted">${esc(m.interrupt.detail || '')}</div></div></div><div class="row" style="margin-top:12px"><button class="btn" data-act="int-allow">Allow once</button><button class="btn ghost" data-act="int-deny">Do not allow</button></div></div>` : `<p class="small faint">Asked for a go-ahead: ${esc(m.interrupt.reason)}. No longer waiting.</p>`;
+  const gate = !m.interrupt ? '' : waiting ? `<div class="card gate"><div class="row" style="align-items:flex-start">${icon(m.interrupt.kind === 'otp' ? 'pin' : m.interrupt.kind === 'signin' ? 'lock' : 'pan_tool')}<div class="grow"><b>${m.interrupt.kind === 'otp' || m.interrupt.kind === 'signin' ? '' : 'The agent wants to: '}${esc(m.interrupt.reason)}</b><div class="small muted">${esc(m.interrupt.detail || '')}${S.boot.sample && m.interrupt.kind === 'otp' ? ' On the sample portal any 6 digits work.' : ''}</div></div></div><div class="row wrap" style="margin-top:12px">${m.interrupt.kind === 'otp' ? `<input class="input" id="int-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6 digit code" aria-label="One-time code" style="width:150px">` : ''}<button class="btn" data-act="int-allow">${m.interrupt.kind === 'otp' ? 'Continue' : m.interrupt.kind === 'signin' ? 'I have signed in' : 'Allow once'}</button><button class="btn ghost" data-act="int-deny">${m.interrupt.kind === 'step' || !m.interrupt.kind ? 'Do not allow' : 'Stop'}</button></div></div>` : `<p class="small faint">Asked for a go-ahead: ${esc(m.interrupt.reason)}. No longer waiting.</p>`;
   const toolErr = m.toolError ? `<div class="note">${icon('error_outline')}<span>${esc(m.toolError)}${m.blockedHost && S.boot.admin && !readOnly ? ` <button class="link" data-act="allow-site" data-host="${esc(m.blockedHost)}">Allow ${esc(m.blockedHost)}</button>` : m.blockedHost ? ' An admin can add it in Setup.' : ''}</span></div>` : '';
   const body = m.mode === 'unavailable'
     ? `<div class="note">${icon('error_outline')}<span>The model could not be reached and nothing in your documents matches this question.${S.boot.admin ? ` <a class="link" href="#/os/apps/vanikgpt/overview">Check VanikGPT health</a>` : ' Try again in a bit, or tell your admin.'}</span></div>`

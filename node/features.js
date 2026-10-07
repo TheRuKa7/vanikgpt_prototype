@@ -4,7 +4,7 @@
 const crypto = require('crypto'), fs = require('fs'), path = require('path');
 
 module.exports = function install(ctx) {
-  const { db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM } = ctx;
+  const { db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM } = ctx, SAMPLE = require('./sample');
   const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 
   // ---------- webhooks: signed, retried three times, every attempt logged
@@ -12,7 +12,8 @@ module.exports = function install(ctx) {
   async function deliver(h, event, payload, attempt = 1, did = uid('dl')) {
     const body = JSON.stringify({ id: did, event, at: now(), tenant: db.tenant.slug, data: payload });
     let code = 0, ok = false;
-    try {
+    if (h.url.startsWith('sample://')) { code = 200; ok = true; } // the sample receiver accepts everything
+    else try {
       const r = await fetch(h.url, { method: 'POST', body, signal: AbortSignal.timeout(5000), headers: { 'Content-Type': 'application/json', 'X-Vanik-Event': event, 'X-Vanik-Delivery': did, 'X-Vanik-Signature': 'sha256=' + crypto.createHmac('sha256', h.secret).update(body).digest('hex') } });
       code = r.status; ok = r.ok;
     } catch { /* unreachable */ }
@@ -25,7 +26,7 @@ module.exports = function install(ctx) {
   const hookView = h => ({ id: h.id, url: h.url, events: h.events, active: h.active, createdAt: h.createdAt, createdBy: h.createdBy });
   on('POST', '/api/webhooks', ({ u, body }) => {
     const url = String(body.url || '').trim(), events = (body.events || []).filter(e => EVENTS.includes(e));
-    if (!/^https?:\/\/[^\s]+$/i.test(url)) throw err(400, 'Enter a full address that starts with http:// or https://.');
+    if (!/^(https?|sample):\/\/[^\s]+$/i.test(url)) throw err(400, 'Enter a full address that starts with http:// or https://.');
     if (!events.length) throw err(400, 'Pick at least one event.');
     const h = { id: uid('wh'), url, events, active: true, secret: 'whsec_' + crypto.randomBytes(18).toString('base64url'), createdAt: now(), createdBy: u.name };
     db.webhooks.unshift(h); audit(u, 'Added a webhook', url, events.join(', '));
@@ -95,6 +96,17 @@ module.exports = function install(ctx) {
     delete body.use_context; delete body.include_sources;
     if (!db.device.online) return gwFail(res, 503, 'appliance_offline', 'The Vanik Appliance is offline.');
     if (!serving(body.model)) return gwFail(res, 404, 'model_not_found', `The model "${body.model || ''}" is not serving. Call /gateway/v1/models to see what is.`);
+    if (!GW.url && ctx.DEMO) { // sample workspace with no model server: answer from the passages, or say plainly that this is a sample reply
+      if (kind === 'embeddings') { const inp = [].concat(body.input || ''); return { object: 'list', model: body.model, sample: true, data: inp.map((t, index) => ({ object: 'embedding', index, embedding: Array.from({ length: 16 }, (_, i) => +(((parseInt(sha(String(t) + i).slice(0, 6), 16) / 0xffffff) * 2 - 1).toFixed(4))) })), usage: { prompt_tokens: ctx.estTok(inp.join(' ')), total_tokens: ctx.estTok(inp.join(' ')) } }; }
+      const sys = (body.messages || []).find(m => m.role === 'system' && /^Answer from the sources below/.test(m.content)), q = [...(body.messages || [])].reverse().find(m => m.role === 'user');
+      const hits = sys && q ? await ctx.search(String(q.content), keyDocs(k) || [], 5) : [];
+      const content = hits.length ? ctx.passageAnswer(String(q.content), hits, 4) : 'Sample reply: no model server is connected to this gateway, so this line stands in for the model. Turn on "Use the knowledge base" to get an answer built from your documents.';
+      const usage = { prompt_tokens: ctx.estTok(JSON.stringify(body.messages || '')), completion_tokens: ctx.estTok(content) }; usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+      if (k.id) { k.tokens = (k.tokens || 0) + usage.total_tokens; save(); }
+      const id = 'chatcmpl-' + uid('s');
+      if (body.stream) { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); for (const part of content.match(/\S+\s*/g) || []) { res.write('data: ' + JSON.stringify({ id, object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { content: part } }] }) + '\n\n'); await new Promise(r => setTimeout(r, 18)); } res.write('data: [DONE]\n\n'); return res.end(); }
+      return { id, object: 'chat.completion', model: body.model, sample: true, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage };
+    }
     if (!GW.url) return gwFail(res, 503, 'model_unreachable', 'No model server is reachable from this gateway right now.');
     let up;
     try { up = await fetch(GW.url + '/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + GW.key }, body: JSON.stringify({ ...body, model: (kind === 'embeddings' ? process.env.VANIK_GATEWAY_EMBED_MODEL : GW.model) || body.model }), signal: AbortSignal.timeout(120000) }); }
@@ -120,20 +132,22 @@ module.exports = function install(ctx) {
     c.lastSyncAt = now(); c.error = '';
     const col = db.collections.find(x => x.id === c.collectionId);
     if (!col) { c.error = 'Its collection was deleted.'; c.active = false; return; }
-    let files; try { files = listFiles(c.path); } catch { c.error = 'The folder cannot be read.'; return; }
+    const sample = c.path.startsWith('sample://') ? SAMPLE.shareFiles(c.path) : null;
+    let files; try { files = sample ? sample.map(f => c.path + '/' + f.name) : listFiles(c.path); } catch { c.error = 'The folder cannot be read.'; return; }
     const mine = db.documents.filter(d => d.source && d.source.connectorId === c.id), seen = new Set();
     let added = 0, updated = 0, removed = 0, skipped = 0;
     for (const f of files) {
       const ext = path.extname(f).toLowerCase(); let st;
-      try { st = fs.statSync(f); } catch { continue; }
+      const sf = sample && sample.find(x => c.path + '/' + x.name === f);
+      try { st = sf ? { size: sf.text.length, mtimeMs: sf.mtime } : fs.statSync(f); } catch { continue; }
       if (!TEXT_EXT.has(ext) || st.size > 5e6) { skipped++; continue; }
       seen.add(f);
       const old = mine.find(d => d.source.path === f);
       if (old && old.source.mtime === st.mtimeMs) continue;
-      let text = fs.readFileSync(f, 'utf8');
+      let text = sf ? sf.text : fs.readFileSync(f, 'utf8');
       if (ext === '.html' || ext === '.htm') text = text.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ');
       try {
-        const d = ctx.addDocument(by, col.id, { name: path.relative(c.path, f).replace(/\\/g, '/'), size: st.size, type: ext.slice(1), pages: [text] }, true);
+        const d = ctx.addDocument(by, col.id, { name: sf ? sf.name : path.relative(c.path, f).replace(/\\/g, '/'), size: st.size, type: ext.slice(1), pages: [text] }, true);
         d.source = { connectorId: c.id, path: f, mtime: st.mtimeMs };
         if (old) { db.documents.splice(db.documents.indexOf(old), 1); updated++; } else added++;
       } catch { skipped++; }
@@ -144,8 +158,8 @@ module.exports = function install(ctx) {
   }
   setInterval(() => { for (const c of db.connectors) if (c.active && Date.now() - new Date(c.lastSyncAt || 0) >= c.everyMinutes * 60000) syncConnector(c, SYSTEM); }, 10000).unref();
   on('POST', '/api/connectors', ({ u, body }) => {
-    const dir = path.resolve(String(body.path || '').trim()), col = byId(db.collections, body.collectionId, 'Collection');
-    if (!body.path || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw err(400, 'That folder does not exist on the appliance.');
+    const typed = String(body.path || '').trim(), isSample = SAMPLE.shareFiles(typed).length > 0, dir = isSample ? typed : path.resolve(typed), col = byId(db.collections, body.collectionId, 'Collection');
+    if (!isSample && (!typed || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory())) throw err(400, 'That folder does not exist on the appliance. To try it without one, use sample://finance-share.');
     if (db.connectors.some(c => c.path === dir && c.collectionId === col.id)) throw err(409, 'That folder is already connected to this collection.');
     const c = { id: uid('cn'), type: 'folder', path: dir, collectionId: col.id, everyMinutes: Math.max(1, Math.min(1440, +body.everyMinutes || 15)), active: true, createdAt: now(), createdBy: u.name, lastSyncAt: null, stats: null, error: '' };
     db.connectors.unshift(c); audit(u, 'Connected a folder', dir, col.name); syncConnector(c, u); return c;
@@ -266,19 +280,67 @@ module.exports = function install(ctx) {
       result: { kind: 'quotes', suppliers: totals, recommended: rec.supplier, summary: [['Suppliers', String(docs.length)], ['Items', String(lines.length)], ['Recommended', rec.supplier], ['Recommended total', money(rec.total)]], lines, findings },
       events: [['rfq.quote_received', { suppliers: totals, recommended: rec.supplier }]] };
   }
+  // ---------- custom workflows: a person lists the documents and the rules; the rules are exact, not guesses
+  const RULES = {
+    present: { fields: { gstin: ['A GSTIN', d => d.gstins[0]], pan: ['A PAN', d => (d.text.replace(RX.gstin, ' ').match(RX.pan) || [])[0]], ifsc: ['An IFSC', d => (d.text.match(RX.ifsc) || [])[0]], 'invoice no': ['An invoice number', d => d.invoiceNo], 'po no': ['A purchase order number', d => d.poNo], date: ['A date', d => d.date || (d.text.match(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/) || [])[0]], total: ['A total', d => d.total] } },
+  };
+  const cleanRule = (r, roles) => {
+    const doc = roles.includes(r.doc) ? r.doc : 'any', n = v => Math.max(0, +v || 0);
+    if (r.type === 'present' && RULES.present.fields[r.field]) return { type: 'present', field: r.field, doc };
+    if (r.type === 'valid_ids') return { type: 'valid_ids' };
+    if (r.type === 'same_value' && ['gstin', 'po no', 'invoice no'].includes(r.field)) return { type: 'same_value', field: r.field };
+    if (r.type === 'totals_match' && roles.includes(r.a) && roles.includes(r.b) && r.a !== r.b) return { type: 'totals_match', a: r.a, b: r.b, tolerance: Math.min(50, n(r.tolerance)) };
+    if (r.type === 'phrase' && String(r.text || '').trim()) return { type: 'phrase', doc, text: String(r.text).trim().slice(0, 120), must: r.must !== false };
+    if (r.type === 'max_total' && n(r.amount) > 0) return { type: 'max_total', doc, amount: n(r.amount) };
+    return null;
+  };
+  function cleanType(b, prev = {}) {
+    const name = String(b.name || '').trim().slice(0, 60); if (!name) throw err(400, 'Give the workflow a name.');
+    const docs = (b.docs || []).map((d, i) => ({ role: String(d.role || 'doc' + (i + 1)).replace(/[^a-z0-9]/gi, '').slice(0, 20) || 'doc' + (i + 1), label: String(d.label || '').trim().slice(0, 40) })).filter(d => d.label).slice(0, 6);
+    if (!docs.length) throw err(400, 'Add at least one document the workflow reads.');
+    const roles = docs.map(d => d.role), rules = (b.rules || []).map(r => cleanRule(r || {}, roles)).filter(Boolean).slice(0, 20);
+    if (!rules.length) throw err(400, 'Add at least one rule to check.');
+    return { ...prev, name, description: String(b.description || '').trim().slice(0, 200), icon: /^[a-z_]{2,30}$/.test(b.icon || '') ? b.icon : 'rule', docs, rules, approval: ['fail', 'always', 'never'].includes(b.approval) ? b.approval : 'fail' };
+  }
+  function customRun(def, inputs) {
+    const docs = inputs.map(i => ({ ...readDoc(i), role: i.role })), label = r => (def.docs.find(d => d.role === r) || { label: 'any document' }).label, pool = r => r === 'any' ? docs : docs.filter(d => d.role === r);
+    const total = d => d.total !== null && d.total !== undefined ? d.total : (d.lines.length ? d.lines.reduce((a, l) => a + (l.amount || 0), 0) : num((d.text.match(/total[^\d\n]{0,12}([\d,]+(?:\.\d+)?)/i) || [])[1]));
+    const findings = [], add = (ok, text) => findings.push({ level: ok ? 'ok' : 'warn', text });
+    const missing = def.docs.filter(d => !docs.some(x => x.role === d.role)); missing.forEach(d => add(false, `${d.label} was not given.`));
+    for (const r of def.rules) {
+      if (r.type === 'present') { const f = RULES.present.fields[r.field], hit = pool(r.doc).map(d => f[1](d)).find(Boolean); add(!!hit, hit ? `${f[0]} is in ${r.doc === 'any' ? 'the documents' : 'the ' + label(r.doc).toLowerCase()}: ${hit}.` : `${f[0]} is missing from ${r.doc === 'any' ? 'the documents' : 'the ' + label(r.doc).toLowerCase()}.`); }
+      if (r.type === 'valid_ids') { const text = docs.map(d => d.text).join('\n'), g = [...new Set(text.match(RX.gstin) || [])], bad = g.filter(x => !gstinOk(x)); add(!bad.length, g.length ? (bad.length ? `These GSTINs fail the checksum: ${bad.join(', ')}.` : `Every GSTIN passes the checksum (${g.length} checked).`) : 'No GSTIN was found to check.'); }
+      if (r.type === 'same_value') { const get = d => r.field === 'gstin' ? d.gstins[0] : r.field === 'po no' ? d.poNo : d.invoiceNo, vals = docs.map(get).filter(Boolean), same = new Set(vals.map(v => norm(v))).size <= 1; const nm = { gstin: 'GSTIN', 'po no': 'purchase order number', 'invoice no': 'invoice number' }[r.field]; add(vals.length > 1 && same, vals.length < 2 ? `The ${nm} could not be compared: it is in fewer than two documents.` : same ? `The ${nm} is the same in every document: ${vals[0]}.` : `The ${nm} differs between documents: ${[...new Set(vals)].join(' and ')}.`); }
+      if (r.type === 'totals_match') { const a = pool(r.a)[0], b = pool(r.b)[0], ta = a && total(a), tb = b && total(b); if (ta == null || tb == null) add(false, `The totals of the ${label(r.a).toLowerCase()} and the ${label(r.b).toLowerCase()} could not both be read.`); else { const gap = ta ? Math.abs(ta - tb) / ta * 100 : (tb ? 100 : 0); add(gap <= r.tolerance, `${label(r.a)} total ${money(ta)} and ${label(r.b).toLowerCase()} total ${money(tb)} ${gap <= r.tolerance ? 'agree' : 'differ by ' + gap.toFixed(1) + '%'}${r.tolerance ? ` (allowed ${r.tolerance}%)` : ''}.`); } }
+      if (r.type === 'phrase') { const has = pool(r.doc).some(d => norm(d.text).includes(norm(r.text))); add(has === r.must, `"${r.text}" ${has ? 'is' : 'is not'} in ${r.doc === 'any' ? 'the documents' : 'the ' + label(r.doc).toLowerCase()}${has === r.must ? '.' : r.must ? ', and it has to be.' : ', and it must not be.'}`); }
+      if (r.type === 'max_total') { const ts = pool(r.doc).map(total).filter(v => v != null), top = ts.length ? Math.max(...ts) : null; add(top !== null && top <= r.amount, top === null ? 'No total could be read to compare with the limit.' : `Total ${money(top)} is ${top <= r.amount ? 'within' : 'above'} the limit of ${money(r.amount)}.`); }
+    }
+    const bad = findings.filter(f => f.level === 'warn').length, amount = Math.max(0, ...docs.map(total).filter(v => v != null));
+    return { key: def.id + '|' + sha(inputs.map(i => i.role + i.name + i.text).sort().join('|')).slice(0, 16), title: `${def.name}: ${(docs.find(d => d.invoiceNo) || {}).invoiceNo || (docs.find(d => d.poNo) || {}).poNo || inputs[0].name}`, needsApproval: def.approval === 'always' || (def.approval === 'fail' && bad > 0), amount, outcome: bad ? `${bad} ${bad === 1 ? 'rule' : 'rules'} not met` : 'All rules met',
+      result: { kind: 'custom', summary: [['Workflow', def.name], ['Documents', inputs.map(i => i.name).join(', ')], ['Rules checked', String(def.rules.length)], ['Rules met', String(findings.length - bad - 0)], ['Highest total', amount ? money(amount) : 'None read']], findings }, events: [] };
+  }
+  const typeView = t => ({ id: t.id, name: t.name, description: t.description, icon: t.icon, docs: t.docs, rules: t.rules, approval: t.approval, createdBy: t.createdBy, createdByName: t.createdByName, updatedAt: t.updatedAt });
+  const ownType = (u, id) => { const t = byId(db.flowTypes, id, 'Workflow'); if (!(isAdmin(u) || t.createdBy === u.id)) throw err(403, 'You can only change workflows you made.'); return t; };
+  on('GET', '/api/workflow-types', ({ u }) => { needGpt(u); return db.flowTypes.map(typeView); });
+  on('POST', '/api/workflow-types', ({ u, body }) => { needGpt(u); const t = { id: uid('ft'), ...cleanType(body), createdBy: u.id, createdByName: u.name, createdAt: now(), updatedAt: now() }; db.flowTypes.push(t); audit(u, 'Created a workflow', t.name, t.rules.length + ' rules'); return typeView(t); });
+  on('PUT', '/api/workflow-types/:id', ({ u, p, body }) => { const t = ownType(u, p.id); Object.assign(t, cleanType(body, t), { updatedAt: now() }); audit(u, 'Changed a workflow', t.name); return typeView(t); });
+  on('DELETE', '/api/workflow-types/:id', ({ u, p }) => { const t = ownType(u, p.id); db.flowTypes = db.flowTypes.filter(x => x.id !== t.id); audit(u, 'Deleted a workflow', t.name); return { ok: true }; });
+
   const TYPES = { three_way: ['Three-way match', threeWay], kyc: ['Vendor KYC check', kyc], quotes: ['Quote comparison', quotes] };
-  const wfRow = w => ({ id: w.id, type: w.type, typeName: TYPES[w.type][0], title: w.title, status: w.status, outcome: w.outcome, amount: w.amount, createdAt: w.createdAt, createdByName: w.createdByName, decidedAt: w.decision ? w.decision.at : null });
+  const typeOf = id => { if (TYPES[id]) return TYPES[id]; const d = String(id || '').startsWith('custom:') && db.flowTypes.find(t => 'custom:' + t.id === id); return d ? [d.name, inputs => customRun(d, inputs)] : null; };
+  const wfRow = w => ({ id: w.id, type: w.type, typeName: w.typeName || (TYPES[w.type] || ['Workflow'])[0], title: w.title, status: w.status, outcome: w.outcome, amount: w.amount, createdAt: w.createdAt, createdByName: w.createdByName, decidedAt: w.decision ? w.decision.at : null });
   const canSee = (u, w) => isAdmin(u) || w.createdBy === u.id;
   on('GET', '/api/workflows', ({ u }) => { needGpt(u); return db.workflows.filter(w => canSee(u, w)).map(wfRow); });
   on('GET', '/api/workflows/:id', ({ u, p }) => { const w = byId(db.workflows, p.id, 'Run'); if (!canSee(u, w)) throw err(404, 'Run not found'); return { ...wfRow(w), key: w.key, steps: w.steps, result: w.result, inputs: w.inputs.map(i => ({ role: i.role, name: i.name })), decision: w.decision || null, canDecide: isAdmin(u) && w.status === 'needs_approval' }; });
   on('POST', '/api/workflows', ({ u, body }) => {
     needGpt(u);
-    const t = TYPES[body.type]; if (!t) throw err(400, 'Pick what to check.');
+    const t = typeOf(body.type); if (!t) throw err(400, 'Pick what to check.');
+    if (!(body.inputs || []).some(i => String(i.text || '').trim())) throw err(400, 'Add the documents to check.');
     const inputs = (body.inputs || []).map(i => ({ role: String(i.role || 'doc'), name: String(i.name || 'file').slice(0, 200), text: String(i.text || '') })).filter(i => i.text.trim());
     const out = t[1](inputs, body.options || {});
     const dup = db.workflows.find(w => w.type === body.type && w.key === out.key && w.status !== 'rejected');
     if (dup && !body.again) throw Object.assign(err(409, 'This was already checked. Open the earlier run, or run it again on purpose.'), { extra: { existing: dup.id } });
-    const w = { id: uid('wf'), type: body.type, key: out.key, title: out.title, createdBy: u.id, createdByName: u.name, createdAt: now(), inputs, result: out.result, amount: out.amount, outcome: out.outcome, status: out.needsApproval ? 'needs_approval' : 'completed', decision: null,
+    const w = { id: uid('wf'), type: body.type, typeName: t[0], key: out.key, title: out.title, createdBy: u.id, createdByName: u.name, createdAt: now(), inputs, result: out.result, amount: out.amount, outcome: out.outcome, status: out.needsApproval ? 'needs_approval' : 'completed', decision: null,
       steps: [['Read the documents', `${inputs.length} read`], ['Run the checks', `${out.result.findings.length} findings`], [out.needsApproval ? 'Waiting for a person to decide' : 'No approval needed', out.outcome]].map(s => ({ label: s[0], detail: s[1] })) };
     db.workflows.unshift(w); audit(u, 'Ran a workflow', t[0], out.outcome);
     out.events.forEach(e => emit(e[0], { runId: w.id, ...e[1] }));

@@ -12,6 +12,7 @@ if (fs.existsSync(envFile)) for (const l of fs.readFileSync(envFile, 'utf8').spl
 }
 const PORT = +process.env.PORT || 4320;
 const GW = { url: (process.env.VANIK_GATEWAY_URL || '').replace(/\/+$/, ''), key: process.env.VANIK_GATEWAY_KEY || '', model: process.env.VANIK_GATEWAY_MODEL || '', ok: false, checkedAt: null };
+const DEMO = process.env.VANIK_DEMO === '1' || (process.argv || []).includes('--demo'); // start with the sample workspace
 const DBF = process.env.VANIK_DB || path.join(DATA, 'db.json');
 
 const uid = p => p + '_' + crypto.randomBytes(5).toString('hex');
@@ -25,7 +26,7 @@ const cleanAccess = a => (!a || a.mode !== 'restricted') ? { mode: 'everyone', t
 const defaultConfig = () => ({
   models: [], defaultModel: null, collections: 'all', access: { mode: 'everyone', teams: [], users: [] },
   safety: { pii: 'mask', retentionDays: 0, uploads: true, blockedTopics: [], maskDocuments: false, dailyLimit: 0, voice: false },
-  tools: { enabled: ['calculator', 'gst', 'tables', 'browser', 'screen'], browserMode: 'allowed', sites: [] },
+  tools: { enabled: ['calculator', 'gst', 'tables', 'browser', 'screen'], browserMode: 'allowed', sites: [], signins: [] },
   advanced: { port: 9016, offline: true, telemetry: false, corsOrigin: '' },
 });
 const freshApp = () => ({ status: 'not_installed', port: 9016, image: 'vanik-gpt:v0.11.4-vanik.2', needsGb: 1.6, installedAt: null, installedBy: null, config: defaultConfig(), versions: [], deployedVersion: null, deploys: [] });
@@ -51,7 +52,7 @@ function seed() {
   };
 }
 let db = fs.existsSync(DBF) ? JSON.parse(fs.readFileSync(DBF, 'utf8')) : seed();
-for (const k of ['keys', 'webhooks', 'deliveries', 'connectors', 'workflows', 'prompts', 'commands', 'mcp']) db[k] = db[k] || [];
+for (const k of ['keys', 'webhooks', 'deliveries', 'connectors', 'workflows', 'prompts', 'commands', 'mcp', 'flowTypes']) db[k] = db[k] || [];
 db.app.config.safety = { ...defaultConfig().safety, ...db.app.config.safety };
 db.app.config.tools = { ...defaultConfig().tools, ...(db.app.config.tools || {}) };
 const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
@@ -124,7 +125,7 @@ function retrieve(query, docs, k = 5) {
 // Builds an answer straight from the matching passages. Used when no model can be reached.
 function passageAnswer(query, hits, max = 4) {
   const qt = new Set(tok(query)), sents = [];
-  hits.forEach(h => (h.text.match(/[^.!?\n]+[.!?]*/g) || [h.text]).forEach(s => {
+  hits.forEach(h => (h.text.match(/(?:[^.!?\n]|\.(?=\d))+[.!?]*/g) || [h.text]).forEach(s => {
     const t = tok(s);
     if (t.length < 4) return;
     const sc = t.filter(w => qt.has(w)).length / Math.sqrt(t.length);
@@ -340,7 +341,7 @@ function bootstrap(u) {
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
-    plugins: AG.PLUGINS, toolConnectors: AG.mcpViews(),
+    plugins: AG.PLUGINS, toolConnectors: AG.mcpViews(), sample: !!db.sample,
     embeddingReady: !!(GW.ok && db.models.some(m => m.kind === 'embedding' && m.status === 'serving')),
   };
 }
@@ -530,7 +531,8 @@ on('PUT', '/api/app/config', ({ u, body }) => {
     access: cleanAccess(c.access),
     safety: { pii: ['off', 'flag', 'mask'].includes(c.safety && c.safety.pii) ? c.safety.pii : d.safety.pii, retentionDays: Math.max(0, Math.min(3650, +(c.safety && c.safety.retentionDays) || 0)), uploads: !(c.safety && c.safety.uploads === false),
       blockedTopics: [...new Set(((c.safety && c.safety.blockedTopics) || []).map(t => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 30), maskDocuments: !!(c.safety && c.safety.maskDocuments), dailyLimit: Math.max(0, Math.min(10000, Math.round(+(c.safety && c.safety.dailyLimit) || 0))), voice: !!(c.safety && c.safety.voice) },
-    tools: !c.tools ? d.tools : { enabled: (c.tools.enabled || []).filter(x => ['calculator', 'gst', 'tables', 'browser', 'screen'].includes(x)), browserMode: c.tools.browserMode === 'any' ? 'any' : 'allowed', sites: [...new Set((c.tools.sites || []).map(x => String(x).toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0]).filter(x => /^[a-z0-9.-]+$/.test(x)))].slice(0, 100) },
+    tools: !c.tools ? d.tools : { enabled: (c.tools.enabled || []).filter(x => ['calculator', 'gst', 'tables', 'browser', 'screen'].includes(x)), browserMode: c.tools.browserMode === 'any' ? 'any' : 'allowed', sites: [...new Set((c.tools.sites || []).map(x => String(x).toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0]).filter(x => /^[a-z0-9.-]+$/.test(x)))].slice(0, 100),
+      signins: (c.tools.signins || []).map(x => ({ host: String(x.host || '').toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0], kind: x.kind === 'sso' ? 'sso' : 'vault', account: String(x.account || '').trim().slice(0, 80) })).filter(x => /^[a-z0-9.-]+$/.test(x.host)).slice(0, 50) },
     advanced: { port: Math.max(1024, Math.min(65535, +(c.advanced && c.advanced.port) || 9016)), offline: !(c.advanced && c.advanced.offline === false), telemetry: !!(c.advanced && c.advanced.telemetry), corsOrigin: String((c.advanced && c.advanced.corsOrigin) || '').trim() },
   };
   if (a.versions[0] && JSON.stringify(a.versions[0].config) === JSON.stringify(cfg)) return { v: a.versions[0].v, unchanged: true };
@@ -641,7 +643,7 @@ const estTok = s => Math.ceil(String(s || '').length / 4);
 const summarize = msgs => msgs.filter(m => m.content).map(m => (m.role === 'user' ? 'Asked: ' : 'Answered: ') + m.content.replace(/\s+/g, ' ').slice(0, m.role === 'user' ? 140 : 200)).join('\n').slice(-1600);
 // Effort: how many passages, how much history and how long an answer.
 const EFFORT = { quick: { k: 3, hist: 6, sent: 2, out: 0.5 }, balanced: { k: 5, hist: 10, sent: 4, out: 1 }, thorough: { k: 8, hist: 16, sent: 6, out: 1.5 } };
-async function answer(u, c, body, send, ctl) {
+async function answer(u, c, body, send, ctl, script) {
   needGpt(u);
   const cfg = db.app.config, t0 = Date.now();
   let userMsg, resume = null, refused = false, typed = null;
@@ -649,9 +651,10 @@ async function answer(u, c, body, send, ctl) {
     const pend = c.pending;
     if (!pend) throw err(409, 'Nothing is waiting for a go-ahead in this chat.');
     c.pending = null;
+    const held = c.messages[c.messages.length - 1]; if (held && held.role === 'assistant' && body.allow) body.before = (held.activity || []).filter(a => a.state === 'done');
     while (c.messages.length && c.messages[c.messages.length - 1].role === 'assistant') c.messages.pop();
     userMsg = c.messages[c.messages.length - 1];
-    if (body.allow) { resume = pend; audit(u, 'Allowed an agent step', pend.reason); } else { refused = true; AG.endSession(c.id); audit(u, 'Refused an agent step', pend.reason); }
+    if (body.allow) { resume = { ...pend, code: String(body.code || '').trim().slice(0, 12) }; audit(u, 'Allowed an agent step', pend.reason); } else { refused = true; AG.endSession(c.id); audit(u, 'Refused an agent step', pend.reason); }
   } else if (body.regenerate) {
     while (c.messages.length && c.messages[c.messages.length - 1].role === 'assistant') c.messages.pop();
     userMsg = c.messages[c.messages.length - 1];
@@ -676,13 +679,13 @@ async function answer(u, c, body, send, ctl) {
   const as = c.assistantId && db.assistants.find(a => a.id === c.assistantId);
   const effort = EFFORT[c.effort] ? c.effort : 'balanced', eff = EFFORT[effort];
   const model = cfg.models.includes(c.model) ? c.model : cfg.defaultModel, mObj = db.models.find(m => m.id === model), serving = !!mObj && mObj.status === 'serving';
-  const msg = { id: uid('m'), role: 'assistant', content: '', at: now(), citations: [], mode: 'model', model, notice: null, feedback: null, effort, activity: [] };
+  const msg = { id: uid('m'), role: 'assistant', content: '', at: now(), citations: [], mode: 'model', model, notice: null, feedback: null, effort, activity: body.before || [] };
   const act = row => { const i = msg.activity.findIndex(x => x.id === row.id); if (i < 0) msg.activity.push(row); else msg.activity[i] = row; send('activity', row); };
   const finish = usageOut => {
     msg.stopped = ctl.closed(); msg.ms = Date.now() - t0;
     msg.tokensIn = usageOut ? usageOut.prompt_tokens : (msg.budget ? msg.budget.system + msg.budget.passages + msg.budget.history : 0) + estTok(userMsg.content);
     msg.tokensOut = usageOut ? usageOut.completion_tokens : estTok(msg.content);
-    const shots = msg.activity.filter(a => a.shot); shots.slice(0, -1).forEach(a => { delete a.shot; }); // keep only the last screenshot on disk
+    const shots = msg.activity.filter(a => a.shot); shots.slice(0, -1).forEach(a => { if (!a.shot.startsWith('data:image/svg')) delete a.shot; }); // real screenshots are large: keep only the last one on disk
     if (!msg.activity.length) delete msg.activity;
     if (msg.content || !ctl.closed()) c.messages.push(msg);
     c.updatedAt = now(); u.lastActiveAt = now(); save();
@@ -699,9 +702,9 @@ async function answer(u, c, body, send, ctl) {
   // Plugins work on the text as typed, on the device. In mask mode the IDs are shortened in everything that is stored or sent on.
   const shorten = cfg.safety.pii === 'mask' ? t => PII.reduce((x, [, re, check]) => x.replace(re, m => (check && !check(m)) || m.length < 8 || /^https?:/.test(m) ? m : m.slice(0, 2) + '…' + m.slice(-3)), String(t)) : null;
   const T = await AG.runTools(c, typed || userMsg.content, on, null, act, resume, shorten);
-  if (T.interrupt) { c.pending = T.interrupt; msg.mode = 'tool'; msg.model = null; msg.interrupt = { id: T.interrupt.id, reason: T.interrupt.reason, detail: T.interrupt.detail }; audit(u, 'Agent asked for a go-ahead', T.interrupt.reason); return finish(); }
+  if (T.interrupt) { c.pending = T.interrupt; msg.mode = 'tool'; msg.model = null; msg.interrupt = { id: T.interrupt.id, reason: T.interrupt.reason, detail: T.interrupt.detail, kind: T.interrupt.kind || 'step' }; audit(u, 'Agent asked for a go-ahead', T.interrupt.reason); return finish(); }
   if (T.stopped) { msg.toolError = T.stopped; if (T.blockedHost) msg.blockedHost = T.blockedHost; }
-  const usedTools = T.context.length > 0 || !!T.stopped;
+  const usedTools = T.context.length > 0 || T.direct.length > 0 || !!T.stopped;
 
   const question = userMsg.content.replace(/^\/\w+\s*/, '');
   const src = as ? as.collections : c.sources;
@@ -740,7 +743,8 @@ async function answer(u, c, body, send, ctl) {
   msg.budget = { context: ctxTok, system: estTok(sysBase), passages: estTok(passText), history: recent.reduce((a, m) => a + estTok(m.content), 0), output: cap.output, summarized: older.length };
 
   let usageOut = null;
-  if (GW.url && serving && !(T.stopped && !T.context.length)) {
+  if (script) msg.content = script.replace(/ ?\[\[(.+?)\]\]/g, (_, d) => { const h = hits.find(x => x.docName === d); return h ? ` [${h.n}]` : ''; }); // sample workspace: the written answer is given, the passages and tools are real
+  else if (GW.url && serving && !(T.stopped && !T.context.length)) {
     try { usageOut = await streamModel(model, [{ role: 'system', content: sysBase + passText }, ...recent.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: question }], t => { msg.content += t; send('delta', { t }); }, ctl.signal, { max: cap.output }); GW.ok = true; }
     catch (e) { if (!ctl.closed()) { GW.ok = false; GW.checkedAt = now(); msg.content = ''; msg.notice = 'model_unreachable'; } }
   } else if (!usedTools) msg.notice = serving ? 'model_unreachable' : 'model_parked';
@@ -756,7 +760,7 @@ async function answer(u, c, body, send, ctl) {
 }
 // The most central sentences of a text, in their original order. Used for summaries when no model can be reached.
 function central(text, n) {
-  const sents = (text.match(/[^.!?\n]+[.!?]+/g) || [text]).map(x => x.trim()).filter(x => x.length > 25 && !/^File: /.test(x)), freq = {};
+  const sents = (text.match(/(?:[^.!?\n]|\.(?=\d))+[.!?]+/g) || [text]).map(x => x.trim()).filter(x => x.length > 25 && !/^File: /.test(x)), freq = {};
   tok(text).forEach(w => { freq[w] = (freq[w] || 0) + 1; });
   return sents.map((x, i) => ({ x, i, sc: tok(x).reduce((a, w) => a + freq[w], 0) / Math.sqrt(x.length) })).sort((a, b) => b.sc - a.sc).slice(0, n).sort((a, b) => a.i - b.i).map(t => '- ' + t.x).join('\n') || text.slice(0, 600);
 }
@@ -769,7 +773,7 @@ const streamRoute = run => async ({ u, p, body, res }) => {
   if (started) res.end();
 };
 on('POST', '/api/chats/:id/messages', streamRoute(answer));
-on('POST', '/api/chats/:id/resume', streamRoute((u, c, body, send, ctl) => answer(u, c, { resume: true, allow: !!body.allow }, send, ctl)));
+on('POST', '/api/chats/:id/resume', streamRoute((u, c, body, send, ctl) => answer(u, c, { resume: true, allow: !!body.allow, code: body.code }, send, ctl)));
 
 // What the browser plugin keeps from a page: the passages that match the question, or the top of the page.
 function readPage(question, snap) {
@@ -778,9 +782,15 @@ function readPage(question, snap) {
   return { text: snap.text.slice(0, 1400).trim() + (snap.text.length > 1400 ? '…' : ''), summary: question ? 'Nothing on the page matches; kept the top of the page' : `Read ${snap.text.length.toLocaleString()} characters` };
 }
 
-Object.assign(FX, require('./features')({ db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM, addDocument, verhoeff, commandViews, probes, search, allowed, estTok, streamModel, passageAnswer }));
-Object.assign(AG, require('./agent')({ db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
+Object.assign(FX, require('./features')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM, addDocument, verhoeff, commandViews, probes, search, allowed, estTok, streamModel, passageAnswer }));
+Object.assign(AG, require('./agent')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
 
+// The sample workspace is built through the same routes a person uses, once, when the server starts with --demo.
+const call = async (u, m, p, body) => { let match; const r = routes.find(x => x.m === m && (match = p.match(x.re))); if (!r) throw err(404, 'Not found: ' + p); return r.fn({ u, body: body || {}, p: match.groups || {}, q: new URLSearchParams(), req: { headers: {} }, res: { headersSent: false, setHeader() {}, writeHead() {}, end() {} } }); };
+const quiet = { signal: new AbortController().signal, closed: () => false };
+let ready = Promise.resolve();
+if (DEMO && !db.sample) ready = require('./sample').seed({ db, call, audit, uid, ask: (u, c, body, script) => answer(u, c, body, () => {}, quiet, script), attach: (u, c, b) => addDocument(u, 'chat:' + c.id, b),
+  fastDeploy: () => { const d = db.app.deploys[0]; if (d && !d.result) { d.t0 = new Date(Date.now() - 120000).toISOString(); tick(); } } }).then(save, e => { console.error('Sample workspace:', e); });
 
 // ---------- http
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -796,6 +806,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/gateway/')) return serveStatic(req, res, decodeURIComponent(url.pathname));
   try {
+    await ready;
     let match, route;
     for (const r of routes) if (r.m === req.method && (match = url.pathname.match(r.re))) { route = r; break; }
     if (!route) throw err(404, 'Not found');
