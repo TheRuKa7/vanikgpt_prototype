@@ -288,3 +288,11 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
 @media (max-width: 900px) { .card { max-width: 100%; } .card > table.list, .card .tbl { max-width: 100%; } .rule > span { white-space: normal; } .drop { overflow-wrap: anywhere; } }
 :root[data-theme="dark"] .act-row.done .dot, :root[data-theme="dark"] .step.done .dot, :root[data-theme="dark"] .task.done .tick, :root[data-theme="dark"] .act-row.failed .dot, :root[data-theme="dark"] .act-row.waiting .dot { color: #0e0f10; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .act-row.done .dot, :root:not([data-theme="light"]) .step.done .dot, :root:not([data-theme="light"]) .task.done .tick, :root:not([data-theme="light"]) .act-row.failed .dot, :root:not([data-theme="light"]) .act-row.waiting .dot { color: #0e0f10; } }
+
+/* ---------- the live build's places: settings panes, admin panel */
+.two-pane { display: flex; gap: 28px; align-items: flex-start; } .side-tabs { flex: 0 0 190px; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.side-tabs a { padding: 8px 12px; border-radius: 8px; font-size: 13.5px; color: var(--vnk-ink-2); text-decoration: none; } .side-tabs a:hover { background: var(--vnk-surface-2); color: var(--vnk-ink); } .side-tabs a.on { background: var(--vnk-accent-weak); color: var(--vnk-ink); font-weight: 600; box-shadow: inset 2px 0 0 var(--vnk-brand); }
+.live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--vnk-ok); margin-left: 6px; vertical-align: 2px; position: relative; }
+.two-pane h2 { font-size: 20px; } .gpt-top h3 a { color: var(--vnk-ink-2); text-decoration: none; } .gpt-top h3 a:hover { color: var(--vnk-ink); }
+body.no-rating [data-act="msg-up"], body.no-rating [data-act="msg-down"], body.no-code .pyblock > .row, body.no-folders .nav-group-label.folder { display: none; }
+@media (max-width: 900px) { .two-pane { flex-direction: column; gap: 14px; } .side-tabs { flex: none; flex-direction: row; overflow-x: auto; width: 100%; position: static; } .side-tabs a { white-space: nowrap; } .set-row .input[style*="230px"] { width: 150px !important; } }

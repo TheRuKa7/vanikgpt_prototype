@@ -58,6 +58,7 @@ db.app.config.tools = { ...defaultConfig().tools, ...(db.app.config.tools || {})
 const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
 const WK = { canWrite: () => false, openTasks: () => 0 };
 const MO = { memoryFor: () => [] };
+const PA = { flags: () => ({}) };
 const SYSTEM = { id: 'system', name: 'Vanik OS', role: 'owner', teams: [] };
 const FX = { emit() {}, issueKey() {}, revokeSystemKeys() {}, pendingApprovals: () => 0, failedDeliveries: () => 0 };
 let saveT;
@@ -339,8 +340,8 @@ function bootstrap(u) {
     collections: (admin ? db.collections : db.collections.filter(c => allowed(c.access, u))).map(c => ({ ...collectionView(c), canWrite: WK.canWrite(u, c) })),
     gptCollectionIds: gptCollections(u).map(c => c.id),
     assistants: db.assistants.filter(x => canSeeAssistant(u, x)),
-    chats: db.chats.filter(c => c.userId === u.id && !c.temp).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
-    folders: db.folders.filter(f => f.userId === u.id),
+    chats: db.chats.filter(c => c.userId === u.id && !c.temp && !c.archived).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
+    folders: db.folders.filter(f => f.userId === u.id), flags: PA.flags(),
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
@@ -581,7 +582,8 @@ const cleanAssistant = (b, u, prev = {}) => {
   if (!name) throw err(400, 'Give the agent a name.');
   if (!String(b.instructions || '').trim()) throw err(400, 'Tell the agent what to do.');
   const shared = isAdmin(u) && b.shared !== false && (b.shared || prev.shared);
-  return { name: name.slice(0, 60), description: String(b.description || '').trim().slice(0, 140), instructions: String(b.instructions).trim().slice(0, 6000),
+  const live = b.live && typeof b.live === 'object' ? JSON.parse(JSON.stringify(b.live).slice(0, 20000)) : prev.live;
+  return { ...(live ? { live } : {}), name: name.slice(0, 60), description: String(b.description || '').trim().slice(0, 140), instructions: String(b.instructions).trim().slice(0, 6000),
     model: db.app.config.models.includes(b.model) ? b.model : null,
     collections: b.collections === 'all' || !Array.isArray(b.collections) ? 'all' : b.collections.filter(id => db.collections.some(c => c.id === id)),
     starters: (b.starters || []).map(s => String(s).trim()).filter(Boolean).slice(0, 4), shared: !!shared,
@@ -612,6 +614,7 @@ on('PATCH', '/api/chats/:id', ({ u, p, body }) => {
   const c = myChat(u, p.id);
   if (body.title !== undefined) c.title = String(body.title).trim().slice(0, 120) || c.title;
   if (body.pinned !== undefined) c.pinned = !!body.pinned;
+  if (body.archived !== undefined) c.archived = !!body.archived;
   if (body.folderId !== undefined) c.folderId = db.folders.some(f => f.id === body.folderId && f.userId === u.id) ? body.folderId : null;
   if (body.system !== undefined) c.system = String(body.system).trim().slice(0, 2000);
   if (body.shared !== undefined) { c.shared = !!body.shared; audit(u, c.shared ? 'Shared a chat' : 'Stopped sharing a chat'); }
@@ -755,7 +758,7 @@ async function answer(u, c, body, send, ctl, script) {
   const strength = h => { const r = h.via === top.via && top.score ? h.score / top.score : 0.6; return r >= 0.8 ? 'Strong' : r >= 0.45 ? 'Good' : 'Weak'; };
   msg.citations = hits.map(h => ({ n: h.n, docId: h.docId, docName: h.docName, collectionId: h.collectionId, page: h.page, chunkId: h.chunkId, snippet: h.text.slice(0, 240), via: h.via, strength: strength(h) }));
   const mem = MO.memoryFor(u); if (mem.length) msg.memories = mem.length; if (cfg.instructions) msg.rules = true; if (c.system) msg.chatRules = true;
-  if (hits.length && !cmd) msg.followUps = followUps(question, hits);
+  if (hits.length && !cmd && PA.flags().followUps !== false) msg.followUps = followUps(question, hits);
   const sysBase = 'You are VanikGPT, a private assistant running on the company\'s own Vanik Appliance. Be direct and accurate. If you are not sure, say so.'
     + (cfg.instructions ? '\n\nHouse rules from the admin, which always apply:\n' + cfg.instructions : '') + (mem.length ? '\n\nWhat this person asked you to remember:\n- ' + mem.join('\n- ') : '')
     + (as ? '\n\n' + as.instructions : '') + (c.system ? '\n\nFor this chat only:\n' + c.system : '') + (older.length ? '\n\nEarlier in this chat:\n' + c.summary : '');
@@ -818,6 +821,7 @@ Object.assign(FX, require('./features')({ DEMO, db, on, err, uid, now, audit, sa
 Object.assign(AG, require('./agent')({ allowed, DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
 Object.assign(WK, require('./work')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, allowed, cleanAccess, addDocument, canReadDoc, plugins: () => AG.PLUGINS }));
 Object.assign(MO, require('./more')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, save, call: (...a) => call(...a), ask: (u, c, body) => answer(u, c, body, () => {}, quiet) }));
+Object.assign(PA, require('./parity')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt }));
 
 // The sample workspace is built through the same routes a person uses, once, when the server starts with --demo.
 const call = async (u, m, p, body) => { let match; const r = routes.find(x => x.m === m && (match = p.match(x.re))); if (!r) throw err(404, 'Not found: ' + p); return r.fn({ u, body: body || {}, p: match.groups || {}, q: new URLSearchParams(), req: { headers: {} }, res: { headersSent: false, setHeader() {}, writeHead() {}, end() {} } }); };

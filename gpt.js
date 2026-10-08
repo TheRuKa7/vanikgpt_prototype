@@ -51,9 +51,8 @@ export function gptShell(active, content) {
     <input class="input" placeholder="Search chats" value="${esc(G.search)}" data-on="chat-search" aria-label="Search chats">
     <div class="chatlist" id="chatlist">${chatList()}</div>
     <a class="nav-item ${active === 'flows' ? 'is-active' : ''}" href="#/gpt/flows">${icon('fact_check')}Workflows</a>
-    <a class="nav-item ${active === 'assistants' ? 'is-active' : ''}" href="#/gpt/assistants">${icon('smart_toy')}Agents</a>
-    <a class="nav-item ${active === 'knowledge' ? 'is-active' : ''}" href="#/gpt/knowledge">${icon('library_books')}Knowledge</a>
-    <a class="nav-item ${active === 'library' ? 'is-active' : ''}" href="#/gpt/library">${icon('inventory_2')}Library</a>
+    ${(B.flags || {}).notes === false ? '' : `<a class="nav-item ${active === 'notes' ? 'is-active' : ''}" href="#/gpt/notes">${icon('sticky_note_2')}Notes</a>`}
+    <a class="nav-item ${['assistants', 'knowledge', 'workspace', 'library'].includes(active) ? 'is-active' : ''}" href="#/gpt/workspace">${icon('workspaces')}Workspace</a>
     <a class="nav-item ${active === 'tasks' ? 'is-active' : ''}" href="#/gpt/tasks">${icon('task_alt')}<span class="grow">Tasks</span>${B.openTasks ? `<span class="count">${B.openTasks}</span>` : ''}</a>
     <div class="row" style="border-top:1px solid var(--vnk-border);padding-top:10px;margin-top:8px">${userButton()}<span class="right">${themeButton()}</span></div>
   </aside><div class="gpt-main">${content}</div></div>`;
@@ -339,6 +338,7 @@ acts['msg-down'] = el => {
 function pageNew(assistantId) {
   const B = S.boot;
   G.chat = null; G.chatId = null; G.newOpts.assistantId = assistantId && assistantOf(assistantId) ? assistantId : null;
+  if (G.newOpts.temp === undefined) G.newOpts.temp = localStorage.getItem('vnk.tempDefault') === '1';
   const as = assistantOf(G.newOpts.assistantId), shared = B.assistants.slice(0, 4);
   G.focus = true;
   return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="grow">${as ? esc(as.name) : 'New chat'}</h3><button class="icon-btn tip-down tip-left ${G.newOpts.temp ? 'on' : ''}" data-act="temp-toggle" data-tip="${G.newOpts.temp ? 'Temporary chat is on: nothing is kept' : 'Temporary chat: not saved, gone when you leave'}" aria-label="Temporary chat" aria-pressed="${!!G.newOpts.temp}">${icon('history_toggle_off')}</button>${as ? `<a class="btn text" href="#/gpt">${icon('close')}Leave agent</a>` : ''}</div>
@@ -388,6 +388,7 @@ acts['chat-menu'] = el => {
     { label: 'Move to a folder', icon: 'folder', run: () => menu(el, [...(S.boot.folders || []).map(f => ({ label: f.name, icon: 'folder', on: c.folderId === f.id, run: () => patch({ folderId: f.id }) })), c.folderId && { label: 'No folder', icon: 'folder_off', run: () => patch({ folderId: null }) }, '-', { label: 'New folder', icon: 'create_new_folder', run: () => modal({ title: 'New folder', body: `<input class="input" id="f-name" maxlength="40" placeholder="Supplier reviews" aria-label="Folder name">`, actions: [{ label: 'Create', run: async o => { const f = await api('POST', '/api/folders', { name: $('#f-name', o).value }); await patch({ folderId: f.id }); } }] }) }]) },
     G.chat && G.chat.id === id && { label: 'Instructions for this chat', sub: G.chat.system ? 'Set' : 'Tone, role or limits', icon: 'tune', run: () => modal({ title: 'Instructions for this chat', body: `<label class="field"><span>Followed in this chat only ${info('Added on top of the house rules and the agent, if any. For example: answer as a checklist, or reply in Hindi.')}</span><textarea class="input" id="f-sys" rows="4" maxlength="2000">${esc(G.chat.system || '')}</textarea></label>`, actions: [{ label: 'Save', run: o => patch({ system: $('#f-sys', o).value }) }] }) },
     c.shared ? { label: 'Stop sharing', icon: 'group_off', run: () => patch({ shared: false }) } : { label: 'Share with colleagues', sub: 'Read-only, for people with VanikGPT', icon: 'group', run: async () => { await patch({ shared: true }); await navigator.clipboard.writeText(shareLink(id)).catch(() => {}); toast('Shared. The link is copied.'); } },
+    { label: 'Archive', icon: 'inventory_2', run: async () => { await patch({ archived: true }); toast('Archived. Find it under Settings, Archived Chats.'); if (G.chatId === id) { G.chat = null; G.chatId = null; go('#/gpt'); } } },
     { label: 'Export', sub: 'Download as Markdown', icon: 'download', run: async () => { const r = await api('GET', `/api/chats/${id}/export`); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([r.markdown], { type: 'text/markdown' })); a.download = r.name + '.md'; a.click(); URL.revokeObjectURL(a.href); } },
     '-', { label: 'Delete', icon: 'delete_outline', danger: true, run: () => confirmBox('Delete this chat?', 'The chat and any files attached to it are removed. This cannot be undone.', 'Delete', async () => { await api('DELETE', '/api/chats/' + id); await load(); if (G.chatId === id) { G.chat = null; G.chatId = null; go('#/gpt'); } else rerender(); }) },
   ]);
@@ -419,7 +420,7 @@ function pageAssistants() {
   const B = S.boot;
   if (!G.catalog) { G.catalog = 'loading'; api('GET', '/api/agents/catalog').then(c => { G.catalog = c; rerender(); }).catch(() => { G.catalog = null; }); }
   const tools = a => (a.tools || []).map(t => (B.plugins.find(p => p.id === t) || { name: t }).name), have = new Set(B.assistants.map(a => a.name));
-  const card = (a, mine) => `<div class="card app-card flat"><div class="row"><span class="avatar sq">${icon(a.icon || 'smart_toy')}</span><h3 class="grow ellipsis">${esc(a.name)}</h3>${mine && canEdit(a) ? `<button class="icon-btn sm" data-act="as-menu" data-id="${a.id}" aria-label="More">${icon('more_vert')}</button>` : ''}</div>
+  const card = (a, mine) => `<div class="card app-card flat"><div class="row"><span class="avatar sq">${icon(a.icon || 'smart_toy')}</span><h3 class="grow ellipsis">${esc(a.name)}</h3>${mine && canEdit(a) ? `<a class="icon-btn sm tip-left" href="#/gpt/workspace/models/${a.id}" data-tip="Model settings" aria-label="Model settings">${icon('tune')}</a><button class="icon-btn sm" data-act="as-menu" data-id="${a.id}" aria-label="More">${icon('more_vert')}</button>` : ''}</div>
       <p class="muted small">${esc(a.description || 'No description')}</p><div class="row wrap" style="gap:6px">${mine ? chip(a.shared ? 'Shared · ' + accessLabel(a.access) : 'Only you', 'line', false) : ''}${tools(a).map(t => chip(t, 'line', false)).join('')}${a.workflow ? chip('Runs a check', 'line', false) : ''}</div>
       <div class="foot"><span class="small faint grow ellipsis">${mine ? 'By ' + esc(a.createdByName) : 'Ready-made'}</span>${mine ? `${a.workflow ? `<a class="btn ghost" href="#/gpt/flows/new/${a.workflow}">Run check</a>` : ''}<a class="btn" href="#/gpt/new/${a.id}">Start chat</a>` : have.has(a.name) ? chip('Added', 'ok') : `<button class="btn" data-act="tpl-add" data-key="${a.key}">Add</button>`}</div></div>`;
   return gptShell('assistants', `<div class="gpt-top">${navToggle()}<h3 class="grow">Agents ${info('An agent is a saved way of working: instructions, the knowledge it uses, the plugins it may use and starter questions.', 'tip-down')}</h3><a class="btn" href="#/gpt/assistants/new">${icon('auto_fix_high')}New agent</a></div>

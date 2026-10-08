@@ -306,8 +306,8 @@ async function seed(x) {
     const buyer = await agent({ name: 'Supplier portal buyer', icon: 'public', description: 'Looks up prices on the supplier portal, builds a quote and asks before it places anything.', access: { mode: 'restricted', teams: ['Procurement'], users: [] }, instructions: 'You look up parts on the supplier portal for the purchase team. Read prices and lead times from the page, never from memory. Build the quote the person asks for. Stop and ask before you place an order or submit anything. Never type a password.', collections: [fin.id], tools: ['browser', 'screen', 'calculator'], effort: 'thorough', starters: [`/browse https://${HOST}/prices find the M12 hex bolt price and lead time`, `/browse https://${HOST} then type "M16" into "Search parts" then click "Search"`, `/browse https://${HOST}/account find our contract price for the M12 hex bolt`] });
     await agent({ ...tpl('contract'), collections: [legal.id], access: { mode: 'restricted', teams: ['Legal', 'Procurement'], users: [] } });
     // saved prompts
-    await call(owner, 'POST', '/api/prompts', { title: 'Summarise in five points', text: 'Summarise this in five plain points. Keep numbers, dates and names exact.', shared: true });
-    await call(owner, 'POST', '/api/prompts', { title: 'Draft a reply to the vendor', text: 'Draft a short, polite reply to the vendor. State the facts, what we need from them and by when.', shared: true });
+    await call(owner, 'POST', '/api/prompts', { title: 'Summarise in five points', command: 'five', tags: ['summary'], text: 'Summarise this in five plain points. Keep numbers, dates and names exact.', shared: true });
+    await call(owner, 'POST', '/api/prompts', { title: 'Draft a reply to the vendor', command: 'reply', tags: ['vendor'], text: 'Draft a short, polite reply to the vendor. State the facts, what we need from them and by when.', shared: true });
 
     // chats. Tools run for real. Where a model would write, the sample answer is given, with the passages the search really found.
     const chat = async (b, day, turns, o = {}) => {
@@ -388,6 +388,11 @@ async function seed(x) {
     await call(owner, 'POST', '/api/skills', { name: 'Price a part on the supplier portal', description: 'Searches the portal for a part and reads its price and lead time.', shared: true, steps: [`/browse https://${HOST} then type "M12" into "Search parts" then click "Search"`, `/browse https://${HOST}/part/M12-HB-50 find the unit price and lead time`] });
     const auto = await call(owner, 'POST', '/api/automations', { name: 'What we owe Shree Fasteners', prompt: '/use vendor_balance vendor="Shree Fasteners"', every: 'day', assistantId: invoice.id });
     await call(owner, 'POST', `/api/automations/${auto.id}/run`);
+    await call(owner, 'POST', '/api/parity/tools', { name: 'Working days between dates', slug: 'working_days', description: 'Counts working days between two dates, skipping weekends.', shared: true, code: 'class Tools:\n    def working_days(self, start: str, end: str) -> int:\n        \"\"\"Count working days between two ISO dates.\"\"\"\n        from datetime import date, timedelta\n        a, b = date.fromisoformat(start), date.fromisoformat(end)\n        return sum(1 for i in range((b - a).days + 1) if (a + timedelta(i)).weekday() < 5)\n' });
+    await call(owner, 'POST', '/api/parity/functions', { name: 'Add a disclaimer to finance answers', slug: 'finance_disclaimer', description: 'A filter that appends a line to answers about tax.', code: 'class Filter:\n    def outlet(self, body: dict) -> dict:\n        return body\n' });
+    const dd = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+    await call(owner, 'POST', '/api/parity/events', { title: 'Supplier review: Shree Fasteners', calendar: 'Personal', start: dd(2) + 'T11:00', end: dd(2) + 'T12:00', location: 'Meeting room 2', description: 'Bring the INV-7802 notes.' });
+    await call(owner, 'POST', '/api/parity/events', { title: 'Travel claim deadline', calendar: 'Personal', start: dd(9), allDay: true });
     audit(owner, 'Loaded the sample workspace', 'Vanik OS', '3 collections, 4 agents, 4 chats, 5 workflow runs');
     db.sample = { at: new Date().toISOString(), hook: hook.id, erp: erp.id };
   } finally { state.pace = was; }
