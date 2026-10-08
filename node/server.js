@@ -719,7 +719,7 @@ async function answer(u, c, body, send, ctl, script) {
   // Plugins first: exact tools and the sandboxed browser.
   const on = (cfg.tools.enabled || []).filter(t => (as ? (as.tools || []).includes(t) : !Array.isArray(c.plugins) || c.plugins.includes(t))).filter(t => allowed(db.pluginAccess[t], u));
   const slash = resume ? null : (typed || userMsg.content).match(/^\/(\w+)/), want = slash && AG.PLUGINS.find(p => p.slash === slash[1].toLowerCase());
-  if (want && !on.includes(want.id)) { msg.mode = 'tool'; msg.model = null; msg.content = cfg.tools.enabled.includes(want.id) && !allowed(db.pluginAccess[want.id], u) ? `You do not have access to the ${want.name} plugin. An admin decides who can use it.` : `The ${want.name} plugin is turned off ${as ? 'for this agent' : 'here'}.`; send('delta', { t: msg.content }); return finish(); }
+  if (want && !on.includes(want.id)) { msg.mode = 'tool'; msg.model = null; msg.content = cfg.tools.enabled.includes(want.id) && !allowed(db.pluginAccess[want.id], u) ? `You do not have access to the ${want.name} ability. An admin decides who can use it.` : `The ${want.name} ability is turned off ${as ? 'for this agent' : 'here'}.`; send('delta', { t: msg.content }); return finish(); }
   // Plugins work on the text as typed, on the device. In mask mode the IDs are shortened in everything that is stored or sent on.
   const shorten = cfg.safety.pii === 'mask' ? t => PII.reduce((x, [, re, check]) => x.replace(re, m => (check && !check(m)) || m.length < 8 || /^https?:/.test(m) ? m : m.slice(0, 2) + '…' + m.slice(-3)), String(t)) : null;
   const T = await AG.runTools(c, typed || userMsg.content, on, null, act, resume, shorten);

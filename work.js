@@ -37,9 +37,12 @@ function noteModal(pre) {
 acts['msg-more'] = el => {
   const c = chatNow(), m = c.messages.find(x => x.id === el.dataset.id), i = c.messages.indexOf(m), q = (c.messages.slice(0, i).reverse().find(x => x.role === 'user') || { content: c.title }).content.replace(/^\/\w+\s*/, '');
   const web = (m.activity || []).map(a => a.url).filter(Boolean).pop() || '', source = web ? { type: 'web', name: c.title, url: web } : { type: 'chat', chatId: c.id, msgId: m.id, name: c.title }, note = plain(m.content);
-  menu(el, [{ label: 'Save to knowledge', sub: 'Keep it as a note others can find', icon: 'bookmark_add', run: () => noteModal({ title: firstLine(q) || c.title, note, from: web || 'a chat' }) },
+  const extra = moreMenu(m, c).filter(x => x !== '-'), toKnow = { label: 'To knowledge', sub: 'A note others can find by asking', icon: 'library_books', run: () => noteModal({ title: firstLine(q) || c.title, note, from: web || 'a chat' }) };
+  menu(el, [{ label: 'How this answer was made', icon: 'insights', run: () => acts['msg-details'](el) }, { label: 'Read aloud', icon: 'volume_up', run: () => acts['msg-speak'](el) }, '-',
+    { label: 'Save', sub: 'To knowledge, as a note, or to memory', icon: 'bookmark_add', run: () => menu(el, [{ heading: 'Save' }, toKnow, { ...extra[1], label: 'As a private note', sub: 'Only you see it' }, { ...extra[0], label: 'To memory', sub: 'So answers fit you' }]) },
     { label: 'Add as a task', sub: 'For you or a colleague', icon: 'add_task', run: () => taskModal({ title: firstLine(m.content), note, source }) },
-    { label: 'Share with a colleague', sub: 'They get the text, not your chat', icon: 'send', run: () => shareModal({ title: firstLine(m.content), note, source }) }, ...moreMenu(m, c)]);
+    { label: 'Send to a colleague', sub: 'They get the text, not your chat', icon: 'send', run: () => shareModal({ title: firstLine(m.content), note, source }) },
+    extra[2]]);
 };
 
 // ---------- from the knowledge base: notes, files, tasks out of a document
@@ -59,9 +62,9 @@ const srcLink = t => { const s = t.source; if (!s) return ''; const mine = t.cre
   return href ? `<a class="tag" href="${esc(href)}" ${s.type === 'web' ? 'target="_blank" rel="noopener"' : ''}>${icon(ic)}${esc(s.name || 'Source')}</a>` : `<span class="tag">${icon(ic)}${esc(s.name || 'A chat')}</span>`; };
 function taskRow(t) {
   const me = S.boot.me.id, late = t.due && t.status === 'open' && t.due < new Date().toISOString().slice(0, 10), who = t.createdBy !== me ? 'From ' + t.createdByName : t.assignee !== me ? 'For ' + t.assigneeName : '';
-  return `<div class="task ${t.status}"><button class="tick" data-act="task-tick" data-id="${t.id}" aria-label="${t.status === 'done' ? 'Mark as not done' : 'Mark as done'}">${icon('check')}</button>
+  return `<div class="task ${t.status}"><button class="tick tip-right" data-act="task-tick" data-id="${t.id}" data-tip="${t.status === 'done' ? 'Not done yet' : 'Done'}" aria-label="${t.status === 'done' ? 'Mark as not done' : 'Mark as done'}">${icon('check')}</button>
     <div class="grow"><b>${esc(t.title)}</b>${t.note && t.note !== t.title ? `<div class="small muted tnote">${esc(t.note)}</div>` : ''}<div class="row wrap" style="gap:6px;margin-top:7px">${srcLink(t)}${who ? `<span class="small muted">${esc(who)}</span>` : ''}${t.due ? `<span class="small" style="color:var(--vnk-${late ? 'err' : 'ink-2'})">${late ? 'Was due' : 'Due'} ${new Date(t.due + 'T00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>` : ''}<span class="small faint">${ago(t.createdAt)}</span></div></div>
-    <button class="icon-btn sm" data-act="task-menu" data-id="${t.id}" aria-label="More">${icon('more_horiz')}</button></div>`;
+    <button class="icon-btn sm tip-left" data-act="task-menu" data-id="${t.id}" data-tip="More" aria-label="More">${icon('more_horiz')}</button></div>`;
 }
 // A month at a glance: tasks on the day they are due, automations on the day they next run.
 function calendar() {
@@ -75,7 +78,7 @@ function calendar() {
     <div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="dow">${d}</div>`).join('')}${cells.map(d => d ? `<div class="day ${key(d) === today ? 'today' : ''}"><span class="n">${d}</span>${(on[key(d)] || []).join('')}</div>` : '<div class="day off"></div>').join('')}</div></div>`;
 }
 acts['cal-move'] = el => { W.month += +el.dataset.v; rerender(); };
-acts['task-view'] = el => { W.view = el.dataset.v; rerender(); };
+acts['task-view'] = el => { if (el.dataset.v === 'cal') return go('#/gpt/calendar'); W.view = 'list'; go('#/gpt/tasks'); };
 export function tasksPage() {
   if (W.key !== 'tasks') { W.key = 'tasks'; loadTasks(); }
   const l = W.tasks, me = S.boot.me.id, sec = (title, list, tip) => list.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h3>${title}</h3>${tip ? info(tip) : ''}<span class="mono">${list.length}</span></div>${list.map(taskRow).join('')}</div>` : '';
@@ -90,7 +93,7 @@ acts['task-tick'] = async el => { const t = taskOf(el.dataset.id); await api('PA
 acts['task-menu'] = el => { const t = taskOf(el.dataset.id); menu(el, [{ label: 'Change', icon: 'edit', run: () => taskModal(t) }, t.note && { label: 'Save to knowledge', icon: 'bookmark_add', run: () => noteModal({ title: t.title, note: t.note, from: (t.source && (t.source.url || t.source.name)) || '' }) }, '-', { label: 'Delete', icon: 'delete_outline', danger: true, run: () => confirmBox('Delete this task?', 'It is removed for you and for the other person.', 'Delete', async () => { await api('DELETE', '/api/tasks/' + t.id); W.key = ''; await refresh(); }) }]); };
 
 // ---------- Vanik OS: who may use what
-const KINDS = [['collection', 'Knowledge', 'Who can search a collection, and who can add to it.'], ['agent', 'Agents', 'Shared agents. A private agent is only ever seen by the person who made it.'], ['plugin', 'Plugins', 'A plugin that is off in VanikGPT setup is off for everyone.'], ['connector', 'Tool connectors', 'Tools from your own systems, such as the ERP.'], ['workflow', 'Workflows', 'Workflows built here. The three built in are open to everyone who can use VanikGPT.']];
+const KINDS = [['collection', 'Knowledge', 'Who can search a collection, and who can add to it.'], ['agent', 'Agents', 'Shared agents. A private agent is only ever seen by the person who made it.'], ['plugin', 'Plugins', 'An ability that is off in VanikGPT setup is off for everyone.'], ['connector', 'Tool connectors', 'Tools from your own systems, such as the ERP.'], ['workflow', 'Workflows', 'Workflows built here. The three built in are open to everyone who can use VanikGPT.']];
 const loadAccess = () => api('GET', '/api/access').then(a => { W.access = a; rerender(); }).catch(e => toast(e.message, 'err'));
 const who = a => accessLabel(a) + ((a.deny || []).length ? ` · ${a.deny.length} blocked` : '');
 function accessPage() {

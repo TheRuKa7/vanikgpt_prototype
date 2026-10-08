@@ -296,3 +296,15 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
 .two-pane h2 { font-size: 20px; } .gpt-top h3 a { color: var(--vnk-ink-2); text-decoration: none; } .gpt-top h3 a:hover { color: var(--vnk-ink); }
 body.no-rating [data-act="msg-up"], body.no-rating [data-act="msg-down"], body.no-code .pyblock > .row, body.no-folders .nav-group-label.folder { display: none; }
 @media (max-width: 900px) { .two-pane { flex-direction: column; gap: 14px; } .side-tabs { flex: none; flex-direction: row; overflow-x: auto; width: 100%; position: static; } .side-tabs a { white-space: nowrap; } .set-row .input[style*="230px"] { width: 150px !important; } }
+
+/* ---------- the simpler shape: job cards, rows that go somewhere, routines */
+.jobs { display: grid; gap: 10px; width: 100%; max-width: 732px; margin: 22px auto 0; padding: 0 16px; }
+.job { display: flex; align-items: center; gap: 14px; text-align: left; padding: 14px 16px; border: 1px solid var(--vnk-border); border-radius: 14px; background: var(--vnk-surface); transition: border-color .15s, transform .15s var(--ease), box-shadow .2s; } .job b { display: block; font-weight: 600; margin-top: 2px; } .job > .mi { color: var(--vnk-ink-3); transition: transform .15s var(--ease), color .15s; }
+.job:hover { border-color: var(--vnk-ink); transform: translateY(-1px); box-shadow: var(--vnk-shadow); } .job:hover > .mi { transform: translateX(3px); color: var(--vnk-ink); }
+#root.fresh .job { animation: rise .32s var(--ease) both; } #root.fresh .job:nth-child(2) { animation-delay: .05s; } #root.fresh .job:nth-child(3) { animation-delay: .1s; }
+.go-row { display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 10px; text-decoration: none; color: inherit; } .go-row + .go-row { border-top: 1px solid var(--vnk-border); border-radius: 0; } .go-row:hover { background: var(--vnk-surface-2); } .go-row b { display: block; } .go-row > .mi:last-child { color: var(--vnk-ink-3); transition: transform .15s var(--ease); } .go-row:hover > .mi:last-child { transform: translateX(3px); color: var(--vnk-ink); }
+.card.rt { display: flex; flex-direction: column; gap: 10px; } .card.rt .foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--vnk-border); display: flex; align-items: center; gap: 8px; } .card.rt p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.9em; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); column-gap: 28px; } .feature-grid .set-row:nth-child(-n+2) { border-top: 0; }
+.task .tick { width: 26px; height: 26px; } .opt .small { display: block; margin-top: 2px; }
+.composer .tools .pick { height: 28px; } .msg-actions { gap: 2px; }
+@media (max-width: 700px) { .feature-grid { grid-template-columns: 1fr; } .feature-grid .set-row:nth-child(2) { border-top: 1px solid var(--vnk-border); } }
