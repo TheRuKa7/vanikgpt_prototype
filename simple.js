@@ -5,6 +5,7 @@
 import { S, $, esc, icon, info, chip, go, ago, api, refresh, rerender, acts, toast, modal, menu, navToggle, applyTheme, initials, ROLE, signOut } from './core.js';
 import { gptShell } from './gpt.js';
 import { LIB, loadLibrary } from './more.js';
+import { adminExtra } from './edge.js';
 
 const Z = { key: '', types: null, runs: null, filter: 'all', par: null, mem: null };
 export const simpleRouteChanged = () => { Z.key = ''; };
@@ -57,6 +58,7 @@ export function settingsSimple() {
       <div class="set-row"><div class="grow"><div class="lbl">Archived chats</div><div class="small muted">${p ? p.archived.length : 0} archived</div></div>${p && p.archived.length ? `<button class="btn ghost" data-act="st-archived">Open</button>` : ''}<button class="btn ghost" data-act="me-archive-all">Archive all</button></div>
       <div class="set-row"><div class="grow"><div class="lbl">Delete all my chats</div></div><button class="btn danger" data-act="me-delete-all">Delete all</button></div>`)}
     ${card('Account', '', `<div class="row"><span class="avatar" style="width:44px;height:44px">${esc(initials(me.name))}</span><div class="grow"><b>${esc(me.name)}</b><div class="small muted">${esc(me.email || '')} · ${ROLE[me.role]}${(me.teams || []).length ? ' · ' + me.teams.map(esc).join(', ') : ''}</div></div><button class="btn ghost" data-act="st-switch">Switch account</button></div>`)}
+    <div class="card" style="padding:6px 8px">${row('key', 'Your API', 'Keys and a ready command, for people who build', '#/gpt/settings/api')}</div>
     <a class="link small" href="#/gpt/settings/all">Advanced: every setting carried over from the live build</a></div>`, 760);
 }
 acts['st-switch'] = signOut;
@@ -70,7 +72,8 @@ export function adminSimple() {
   const fl = S.boot.flags || {};
   return page('admin', 'Admin', '', '', `<div class="stack" style="gap:16px">
     <div class="card"><div class="card-head"><h3>What people can use</h3>${info('Turning one off hides it for everyone straight away.')}</div><div class="feature-grid">${FEATURES.map(f => `<div class="set-row"><div class="grow"><div class="lbl">${f[3]}</div></div><button class="switch ${fl[f[0]] !== false ? 'on' : ''}" role="switch" aria-checked="${fl[f[0]] !== false}" aria-label="${f[3]}" data-act="ad-flag" data-k="${f[0]}"></button></div>`).join('')}</div></div>
-    <div class="card" style="padding:6px 8px">${row('tune', 'Setup', 'Models, knowledge, abilities, sign-ins for sites, safety and house rules', '#/os/apps/vanikgpt/setup')}${row('group', 'People and teams', 'Invite, set roles, put people in teams', '#/os/people')}${row('admin_panel_settings', 'Who can use what', 'Each collection, agent, ability, connector and routine', '#/os/access')}${row('bar_chart', 'Usage', 'Questions, people, how answers were made', '#/os/apps/vanikgpt/usage')}${row('thumbs_up_down', 'Ratings', "A board of models from people's ratings, and the ratings", '#/gpt/admin/all/evaluations')}${row('history', 'Activity', 'Versions, deploys and the audit log', '#/os/apps/vanikgpt/activity')}${row('api', 'For developers', 'API keys, playground, webhooks', '#/os/api-gateway')}</div>
+    <div class="card" style="padding:6px 8px">${row('tune', 'Setup', 'Models, knowledge, abilities, sign-ins for sites, safety and house rules', '#/os/apps/vanikgpt/setup')}${row('group', 'People and teams', 'Invite, set roles, put people in teams', '#/os/people')}${row('admin_panel_settings', 'Who can use what', 'Each collection, agent, ability, connector and routine', '#/os/access')}${row('bar_chart', 'Usage', 'Questions, people, how answers were made', '#/os/apps/vanikgpt/usage')}${row('thumbs_up_down', 'Ratings', "A board of models from people's ratings, and the ratings", '#/gpt/admin/all/evaluations')}${row('history', 'Activity', 'Versions, deploys and the audit log', '#/os/apps/vanikgpt/activity')}${row('dns', 'The appliance', 'Network, storage, monitoring, updates and support', '#/os/devices')}${row('api', 'For developers', 'API keys, playground, webhooks', '#/os/api-gateway')}</div>
+    ${adminExtra()}
     <details class="card"><summary><h3 style="display:inline">Advanced</h3> <span class="small muted">Carried over from the live build</span></summary><div style="margin-top:10px">${row('settings', 'All settings', 'The 16 tabs of the live build. Most are kept and shown, not acted on', '#/gpt/admin/all/settings')}${row('workspaces', 'Workspace', 'Models, prompts, skills and code tools as the live build lays them out', '#/gpt/workspace')}${row('functions', 'Functions', 'Python kept with the app. Not run in this build', '#/gpt/admin/all/functions')}${row('science', 'Playground', 'Chat, completions, images', '#/gpt/playground')}</div></details></div>`, 760);
 }
 

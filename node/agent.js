@@ -356,6 +356,7 @@ module.exports = function install(ctx) {
         const sites = (db.app.config.tools.sites || []).slice(0, 3);
         if (!p.steps.length && sites.length) { res.ask = { question: 'Which site should I open?', options: sites.map(h => ({ label: h, send: `/${p.tool === 'screen' ? 'screen open' : 'browse'} https://${h}` })) }; continue; }
         if (!p.steps.length) { act({ id: uid('act'), kind: 'tool', tool: p.tool, label: 'Browser', state: 'failed', result: 'Give an address to open, for example: /browse https://intranet/prices find the bolt rate' }); continue; }
+        if (p.steps.length > ctx.callLimit() + 1) { act({ id: uid('act'), kind: 'tool', tool: p.tool, label: 'Browser', state: 'failed', result: `That is ${p.steps.length} steps. The limit for one message is ${ctx.callLimit()}.` }); res.stopped = `That asks for ${p.steps.length} steps and the limit for one message is ${ctx.callLimit()}. Split it into two messages, or ask an admin to raise the limit.`; continue; }
         const r = await runBrowser(chat, p.steps, act, { screen: p.tool === 'screen', approved: p.approved, signin: p.signin });
         if (r.interrupt) { res.interrupt = r.interrupt; break; }
         if (r.stopped) { res.stopped = r.stopped; res.blockedHost = r.blockedHost; }

@@ -81,11 +81,11 @@ function composer() {
       <button class="icon-btn sm bordered tip-right" data-act="plus" data-tip="Add files, use an agent, more" aria-label="Add">${icon('add')}</button>
       ${as || (o.sources && o.sources !== 'all') ? `<button class="pick ${as ? 'tip-right' : ''}" data-act="pick-sources" ${as ? 'disabled data-tip="Set by the agent"' : ''}>${icon('library_books')}<span class="ellipsis">${esc(colsLabel(as ? as.collections : o.sources))}</span></button>` : ''}
       ${(o.effort || 'balanced') !== 'balanced' ? `<button class="pick" data-act="pick-effort">${icon('speed')}<span>${EFFORT[o.effort][0]}</span></button>` : ''}
-      ${model && model !== B.app.config.defaultModel ? `<button class="pick" data-act="pick-model">${icon('memory')}<span class="ellipsis">${esc(model)}</span></button>` : ''}
+      ${model && model !== B.app.config.defaultModel ? `<button class="pick ${outsideOf(model) ? 'out' : ''}" data-act="pick-model">${icon(outsideOf(model) ? 'public' : 'memory')}<span class="ellipsis">${esc(outsideOf(model) ? outsideOf(model).name : model)}</span></button>` : ''}
       <span class="grow"></span>
       ${B.app.config.safety.voice ? '' : '<!--'}<button class="icon-btn sm ${G.listening ? 'on' : ''} tip-left" data-act="mic" data-tip="${G.listening ? 'Stop listening' : 'Speak instead of typing'}" aria-label="Voice typing" aria-pressed="${G.listening}">${icon(G.listening ? 'mic' : 'mic_none')}</button>${B.app.config.safety.voice ? '' : '-->'}
       ${busy ? `<button class="send" data-act="stop" aria-label="Stop">${icon('stop')}</button>` : `<button class="send" data-act="send" aria-label="Send">${icon('arrow_upward')}</button>`}
-    </div></div><p class="small faint" style="text-align:center;margin-top:9px">Runs on your Vanik Appliance. Nothing leaves your network.</p></div>`;
+    </div></div><p class="small ${outsideOf(model) ? '' : 'faint'}" style="text-align:center;margin-top:9px${outsideOf(model) ? ';color:var(--vnk-warn)' : ''}">${outsideOf(model) ? `${icon('public')} This chat uses a model outside your network. Your question is sent to ${esc(outsideOf(model).provider)}. Your documents are not, unless an admin allows it.` : 'Runs on your Vanik Appliance. Nothing leaves your network.'}</p>${!c && !as ? `<p style="text-align:center;margin-top:6px"><button class="link small" data-act="temp-toggle">${icon(G.newOpts.temp ? 'visibility' : 'visibility_off')} ${G.newOpts.temp ? 'Temporary chat is on. Nothing will be kept. Turn off' : 'Start a temporary chat'}</button></p>` : ''}</div>`;
 }
 ins['q-input'] = el => { G.draftText = el.value; el.style.height = 'auto'; if (el.value) el.style.height = Math.min(200, el.scrollHeight) + 'px'; const sl = $('#slash'); if (sl) sl.innerHTML = slashHtml(); };
 document.addEventListener('keydown', e => {
@@ -133,7 +133,7 @@ acts.plus = el => {
   const up = S.boot.app.config.safety.uploads;
   menu(el, [up && { label: 'Add files or photos', sub: 'PDF, Word, Excel, text, images of scans', icon: 'attach_file', run: () => acts.attach() }, up && { label: 'Add a folder', sub: 'Every readable file in it, up to 50', icon: 'create_new_folder', run: () => acts['attach-folder']() }, up && '-',
     { label: 'Use an agent', sub: 'A helper set up for one job', icon: 'smart_toy', run: () => agentMenu(el) }, { label: 'Saved prompts', icon: 'bookmark_border', run: () => acts.prompts(el) },
-    { label: 'Options', sub: 'Where answers come from, effort, model, abilities', icon: 'tune', run: () => { const o = G.chat || G.newOpts; menu(el, [{ heading: 'For this chat' }, !assistantOf(o.assistantId) && { label: 'Answer from', sub: colsLabel(o.sources), icon: 'library_books', run: () => acts['pick-sources'](el) }, { label: 'Effort', sub: EFFORT[o.effort || 'balanced'][0], icon: 'speed', run: () => acts['pick-effort'](el) }, S.boot.app.config.models.length > 1 && { label: 'Model', sub: (G.chat ? G.chat.model : G.newOpts.model) || S.boot.app.config.defaultModel, icon: 'memory', run: () => acts['pick-model'](el) }, { label: 'Abilities', sub: 'Calculator, checks, tables, browser', icon: 'extension', run: () => pluginMenu(el) }, { label: 'Connected systems', sub: 'Tools from your own systems', icon: 'hub', run: () => connectorMenu(el) }]); } },
+    { label: 'Options', sub: 'Where answers come from, effort, model, abilities', icon: 'tune', run: () => { const o = G.chat || G.newOpts; menu(el, [{ heading: 'For this chat' }, !assistantOf(o.assistantId) && { label: 'Answer from', sub: colsLabel(o.sources), icon: 'library_books', run: () => acts['pick-sources'](el) }, { label: 'Model', sub: (outsideOf((G.chat ? G.chat.model : G.newOpts.model)) || { name: (G.chat ? G.chat.model : G.newOpts.model) || S.boot.app.config.defaultModel }).name, icon: 'memory', run: () => acts['pick-model'](el) }, { label: 'Abilities', sub: 'Calculator, checks, tables, browser', icon: 'extension', run: () => pluginMenu(el) }, { label: 'Connected systems', sub: 'Tools from your own systems', icon: 'hub', run: () => connectorMenu(el) }]); } },
     '-', { label: 'Commands', sub: 'Type / in the box', icon: 'terminal', run: () => helpBox() }]);
 };
 acts.mic = () => {
@@ -165,9 +165,13 @@ acts.prompts = el => {
 };
 acts['edit-cancel'] = () => { G.editOf = null; G.draftText = ''; rerender(); };
 acts['msg-edit'] = el => { const m = findMsg(el.dataset.id); G.editOf = m.id; G.draftText = m.content; G.focus = true; rerender(); };
+// Models in two groups: on this appliance, and outside the network. "Think harder" sits with them.
+const outsideOf = id => (S.boot.outsideModels || []).find(m => m.id === id);
 acts['pick-model'] = el => {
-  const B = S.boot, cur = (G.chat ? G.chat.model : G.newOpts.model) || B.app.config.defaultModel;
-  menu(el, [{ heading: 'Model' }, ...B.app.config.models.map(id => { const m = B.models.find(x => x.id === id); return { label: id, sub: m && m.status === 'serving' ? 'Serving' : 'Parked. Answers come from documents only.', icon: 'memory', on: id === cur, run: () => setOpt({ model: id }) }; })]);
+  const B = S.boot, o = G.chat || G.newOpts, cur = (G.chat ? G.chat.model : G.newOpts.model) || B.app.config.defaultModel, out = B.outsideModels || [];
+  menu(el, [{ heading: 'On this appliance' }, ...B.app.config.models.map(id => { const m = B.models.find(x => x.id === id); return { label: id, sub: m && m.status === 'serving' ? (m.note || 'Stays inside your network') : 'Parked. Answers come from documents only.', icon: 'memory', on: id === cur, run: () => setOpt({ model: id }) }; }),
+    ...(out.length && !assistantOf(o.assistantId) ? [{ heading: 'Outside your network' }, ...out.map(m => ({ label: m.name, sub: `${m.provider} · ${m.tags.join(', ')} · your question leaves the appliance`, icon: 'public', on: m.id === cur, run: () => setOpt({ model: m.id }) }))] : []),
+    '-', { label: 'Think harder', sub: 'More sources and a longer answer. Slower.', icon: 'psychology', on: (o.effort || 'balanced') === 'thorough', run: () => setOpt({ effort: (o.effort || 'balanced') === 'thorough' ? 'balanced' : 'thorough' }) }]);
 };
 async function ensureChat() {
   if (G.chat) return G.chat;
@@ -301,7 +305,7 @@ function msgHtml(m, last, readOnly) {
       <button class="icon-btn sm ${m.feedback === 'up' ? 'on' : ''}" data-act="msg-up" data-id="${m.id}" data-tip="Helpful" aria-label="Helpful">${icon('thumb_up_off_alt')}</button>
       <button class="icon-btn sm ${m.feedback === 'down' ? 'on' : ''}" data-act="msg-down" data-id="${m.id}" data-tip="Not helpful" aria-label="Not helpful">${icon('thumb_down_off_alt')}</button>
       ${m.content ? `<button class="icon-btn sm" data-act="msg-more" data-id="${m.id}" data-tip="More" aria-label="More">${icon('more_horiz')}</button>` : `<button class="icon-btn sm" data-act="msg-details" data-id="${m.id}" data-tip="How this answer was made" aria-label="How this answer was made">${icon('insights')}</button>`}
-      <span class="mono" style="margin-left:8px">${esc([m.mode === 'model' ? m.model || '' : m.mode === 'documents' ? 'documents only' : m.mode === 'tool' ? 'abilities' : m.mode === 'search' ? 'search only' : '', m.effort && m.effort !== 'balanced' ? m.effort : '', secs].filter(Boolean).join(' · '))}</span>
+      <span class="mono" style="margin-left:8px">${esc([m.outside ? 'outside: ' + String(m.model || '').replace(/^out:[a-z]+\//, '') : m.mode === 'model' ? m.model || '' : m.mode === 'documents' ? 'documents only' : m.mode === 'tool' ? 'abilities' : m.mode === 'search' ? 'search only' : '', m.effort && m.effort !== 'balanced' ? m.effort : '', secs].filter(Boolean).join(' · '))}</span>
     </div>`}</div></div>`;
 }
 const findMsg = id => G.chat.messages.find(m => m.id === id);
@@ -337,7 +341,7 @@ function pageNew(assistantId) {
   if (G.newOpts.temp === undefined) G.newOpts.temp = localStorage.getItem('vnk.tempDefault') === '1';
   const as = assistantOf(G.newOpts.assistantId), shared = B.assistants.slice(0, 4);
   G.focus = true;
-  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="grow">${as ? esc(as.name) : 'New chat'}</h3><button class="icon-btn tip-down tip-left ${G.newOpts.temp ? 'on' : ''}" data-act="temp-toggle" data-tip="${G.newOpts.temp ? 'Temporary chat is on: nothing is kept' : 'Temporary chat: not saved, gone when you leave'}" aria-label="Temporary chat" aria-pressed="${!!G.newOpts.temp}">${icon('history_toggle_off')}</button>${as ? `<a class="btn text" href="#/gpt">${icon('close')}Leave agent</a>` : ''}</div>
+  return gptShell('', `<div class="gpt-top">${navToggle()}<h3 class="grow">${as ? esc(as.name) : 'New chat'}</h3>${as ? `<a class="btn text" href="#/gpt">${icon('close')}Leave agent</a>` : ''}</div>
     <div class="scroll" id="scroll" style="display:flex;flex-direction:column"><div class="hero">
       <h1>${as ? esc(as.name) : 'What do you want to get done?'}</h1>${as && as.description ? `<p class="muted" style="text-align:center;margin:-14px 24px 22px">${esc(as.description)}</p>` : ''}
       ${composer()}

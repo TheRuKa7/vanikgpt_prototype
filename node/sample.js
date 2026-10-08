@@ -393,6 +393,14 @@ async function seed(x) {
     const dd = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await call(owner, 'POST', '/api/parity/events', { title: 'Supplier review: Shree Fasteners', calendar: 'Personal', start: dd(2) + 'T11:00', end: dd(2) + 'T12:00', location: 'Meeting room 2', description: 'Bring the INV-7802 notes.' });
     await call(owner, 'POST', '/api/parity/events', { title: 'Travel claim deadline', calendar: 'Personal', start: dd(9), allDay: true });
+    // the appliance side: a directory, a domain, one outside provider on a sample key, personal API keys, a past support session
+    await call(owner, 'POST', '/api/edge/directory', { provider: 'Microsoft Entra ID' });
+    await call(owner, 'PUT', '/api/edge/network', { domain: 'ai.example.com' });
+    await call(owner, 'PUT', '/api/edge/outside/openrouter', { key: 'sample-key' });
+    await call(owner, 'POST', '/api/edge/outside/openrouter/models', { id: 'anthropic/claude-opus-5.5' });
+    await call(owner, 'PUT', '/api/edge/settings', { userKeys: true });
+    await call(owner, 'POST', '/api/edge/support', { minutes: 60, reason: 'First deploy of VanikGPT was stuck on step 3' });
+    await call(owner, 'POST', `/api/edge/support/${db.edge.support[0].id}/end`);
     audit(owner, 'Loaded the sample workspace', 'Vanik OS', '3 collections, 4 agents, 4 chats, 5 workflow runs');
     db.sample = { at: new Date().toISOString(), hook: hook.id, erp: erp.id };
   } finally { state.pace = was; }

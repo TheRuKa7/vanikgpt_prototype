@@ -59,6 +59,7 @@ const AG = { PLUGINS: [], TEMPLATES: [], endSession() {}, mcpViews: () => [] };
 const WK = { canWrite: () => false, openTasks: () => 0 };
 const MO = { memoryFor: () => [] };
 const PA = { flags: () => ({}) };
+const ED = { outsideOn: () => [], isOutside: () => false, callLimit: () => 10, sendsDocs: () => false, askOutside: async () => {} };
 const SYSTEM = { id: 'system', name: 'Vanik OS', role: 'owner', teams: [] };
 const FX = { emit() {}, issueKey() {}, revokeSystemKeys() {}, pendingApprovals: () => 0, failedDeliveries: () => 0 };
 let saveT;
@@ -341,7 +342,7 @@ function bootstrap(u) {
     gptCollectionIds: gptCollections(u).map(c => c.id),
     assistants: db.assistants.filter(x => canSeeAssistant(u, x)),
     chats: db.chats.filter(c => c.userId === u.id && !c.temp && !c.archived).sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)).map(chatRow),
-    folders: db.folders.filter(f => f.userId === u.id), flags: PA.flags(),
+    folders: db.folders.filter(f => f.userId === u.id), flags: PA.flags(), outsideModels: ED.outsideOn(), network: admin && db.edge ? db.edge.network : null,
     users: admin ? db.users : db.users.map(x => ({ id: x.id, name: x.name })),
     teams: [...new Set(db.users.flatMap(x => x.teams || []))].sort(),
     prompts: db.prompts.filter(q => q.shared || q.userId === u.id), attention: admin ? attention() : [],
@@ -602,7 +603,7 @@ on('POST', '/api/chats', ({ u, body }) => {
   needGpt(u);
   const as = body.assistantId ? db.assistants.find(a => a.id === body.assistantId && canSeeAssistant(u, a)) : null;
   const cfg = db.app.config;
-  const c = { id: uid('c'), userId: u.id, title: 'New chat', pinned: false, assistantId: as ? as.id : null, model: (as && as.model) || (cfg.models.includes(body.model) ? body.model : cfg.defaultModel), sources: as ? as.collections : (body.sources === 'none' || Array.isArray(body.sources) ? body.sources : 'all'), createdAt: now(), updatedAt: now(), messages: [] };
+  const c = { id: uid('c'), userId: u.id, title: 'New chat', pinned: false, assistantId: as ? as.id : null, model: (as && as.model) || (cfg.models.includes(body.model) || ED.isOutside(body.model) ? body.model : cfg.defaultModel), sources: as ? as.collections : (body.sources === 'none' || Array.isArray(body.sources) ? body.sources : 'all'), createdAt: now(), updatedAt: now(), messages: [] };
   if (body.temp) c.temp = true;
   c.effort = (as && as.effort) || (['quick', 'balanced', 'thorough'].includes(body.effort) ? body.effort : 'balanced');
   if (Array.isArray(body.plugins)) c.plugins = body.plugins.map(String);
@@ -618,7 +619,7 @@ on('PATCH', '/api/chats/:id', ({ u, p, body }) => {
   if (body.folderId !== undefined) c.folderId = db.folders.some(f => f.id === body.folderId && f.userId === u.id) ? body.folderId : null;
   if (body.system !== undefined) c.system = String(body.system).trim().slice(0, 2000);
   if (body.shared !== undefined) { c.shared = !!body.shared; audit(u, c.shared ? 'Shared a chat' : 'Stopped sharing a chat'); }
-  if (body.model && db.app.config.models.includes(body.model)) c.model = body.model;
+  if (body.model && (db.app.config.models.includes(body.model) || ED.isOutside(body.model))) c.model = body.model;
   if (['quick', 'balanced', 'thorough'].includes(body.effort)) c.effort = body.effort;
   if (Array.isArray(body.plugins)) c.plugins = body.plugins.map(String);
   if (Array.isArray(body.connectors)) c.connectors = body.connectors.map(String);
@@ -675,7 +676,7 @@ async function answer(u, c, body, send, ctl, script) {
     while (c.messages.length && c.messages[c.messages.length - 1].role === 'assistant') c.messages.pop();
     userMsg = c.messages[c.messages.length - 1];
     if (!userMsg) throw err(400, 'Nothing to answer again.');
-    if (body.model && cfg.models.includes(body.model)) c.model = body.model;
+    if (body.model && (cfg.models.includes(body.model) || ED.isOutside(body.model))) c.model = body.model;
   } else {
     const raw = String(body.content || '').trim();
     if (!raw) throw err(400, 'Type a question first.');
@@ -695,7 +696,7 @@ async function answer(u, c, body, send, ctl, script) {
   }
   const as = c.assistantId && db.assistants.find(a => a.id === c.assistantId);
   const effort = EFFORT[c.effort] ? c.effort : 'balanced', eff = EFFORT[effort];
-  const model = cfg.models.includes(c.model) ? c.model : cfg.defaultModel, mObj = db.models.find(m => m.id === model), serving = !!mObj && mObj.status === 'serving';
+  const outside = ED.isOutside(c.model) && !as, model = outside ? c.model : cfg.models.includes(c.model) ? c.model : cfg.defaultModel, mObj = db.models.find(m => m.id === model), serving = !!mObj && mObj.status === 'serving';
   const msg = { id: uid('m'), role: 'assistant', content: '', at: now(), citations: [], mode: 'model', model, notice: null, feedback: null, effort, activity: body.before || [] };
   const act = row => { const i = msg.activity.findIndex(x => x.id === row.id); if (i < 0) msg.activity.push(row); else msg.activity[i] = row; send('activity', row); };
   const finish = usageOut => {
@@ -768,7 +769,13 @@ async function answer(u, c, body, send, ctl, script) {
   msg.budget = { context: ctxTok, system: estTok(sysBase), passages: estTok(passText), history: recent.reduce((a, m) => a + estTok(m.content), 0), output: cap.output, summarized: older.length };
 
   let usageOut = null;
-  if (script) msg.content = script.replace(/ ?\[\[(.+?)\]\]/g, (_, d) => { const h = hits.find(x => x.docName === d); return h ? ` [${h.n}]` : ''; }); // sample workspace: the written answer is given, the passages and tools are real
+  if (outside && !script && !(T.stopped && !T.context.length)) {
+    msg.outside = true; audit(u, 'Sent a question outside the appliance', model.slice(4), ED.sendsDocs() ? 'With passages from documents' : 'Without documents');
+    if (!ED.sendsDocs()) { msg.citations = []; delete msg.followUps; }
+    try { await ED.askOutside(model, [{ role: 'system', content: sysBase + (ED.sendsDocs() ? passText : '') }, ...recent.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: question }], t => { msg.content += t; send('delta', { t }); }, ctl.signal); }
+    catch (e) { if (!ctl.closed()) { msg.content = ''; msg.toolError = 'The outside model did not answer: ' + e.message; } }
+  }
+  if (msg.content) { /* answered above */ } else if (script) msg.content = script.replace(/ ?\[\[(.+?)\]\]/g, (_, d) => { const h = hits.find(x => x.docName === d); return h ? ` [${h.n}]` : ''; }); // sample workspace: the written answer is given, the passages and tools are real
   else if (GW.url && serving && !(T.stopped && !T.context.length)) {
     try { usageOut = await streamModel(model, [{ role: 'system', content: sysBase + passText }, ...recent.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: question }], t => { msg.content += t; send('delta', { t }); }, ctl.signal, { max: cap.output }); GW.ok = true; }
     catch (e) { if (!ctl.closed()) { GW.ok = false; GW.checkedAt = now(); msg.content = ''; msg.notice = 'model_unreachable'; } }
@@ -818,10 +825,11 @@ function readPage(question, snap) {
 }
 
 Object.assign(FX, require('./features')({ DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, SYSTEM, addDocument, verhoeff, commandViews, probes, search, allowed, estTok, streamModel, passageAnswer }));
-Object.assign(AG, require('./agent')({ allowed, DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
+Object.assign(AG, require('./agent')({ callLimit: () => ED.callLimit(), allowed, DEMO, db, on, err, uid, now, audit, save, isAdmin, GW, A, byId, needGpt, verhoeff, answer, streamModel, readPage, chatTables: c => db.documents.filter(d => d.collectionId === 'chat:' + c.id && d.table).map(d => ({ name: d.name, table: d.table })) }));
 Object.assign(WK, require('./work')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, allowed, cleanAccess, addDocument, canReadDoc, plugins: () => AG.PLUGINS }));
 Object.assign(MO, require('./more')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, save, call: (...a) => call(...a), ask: (u, c, body) => answer(u, c, body, () => {}, quiet) }));
 Object.assign(PA, require('./parity')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt }));
+Object.assign(ED, require('./edge')({ db, on, err, uid, now, audit, isAdmin, A, byId, needGpt, save, probes, issueKey: (...a) => FX.issueKey(...a) }));
 
 // The sample workspace is built through the same routes a person uses, once, when the server starts with --demo.
 const call = async (u, m, p, body) => { let match; const r = routes.find(x => x.m === m && (match = p.match(x.re))); if (!r) throw err(404, 'Not found: ' + p); return r.fn({ u, body: body || {}, p: match.groups || {}, q: new URLSearchParams(), req: { headers: {} }, res: { headersSent: false, setHeader() {}, writeHead() {}, end() {} } }); };

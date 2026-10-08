@@ -6,6 +6,7 @@ import { platformPage, platformRouteChanged } from './platform.js';
 import { flowsPage, flowsRouteChanged } from './flows.js';
 import { tasksPage, workOsPage, workRouteChanged } from './work.js';
 import { libraryPage, moreRouteChanged } from './more.js';
+import { edgeOsPage, edgeDecorate, apiPage, edgeRouteChanged } from './edge.js';
 import { routinesPage, settingsSimple, adminSimple, simpleRouteChanged } from './simple.js';
 import { workspacePage, notesPage, automationsPage, calendarPage, playgroundPage, adminPage, settingsPage, parityRouteChanged, applyFlags } from './parity.js';
 
@@ -32,8 +33,9 @@ async function render() {
     if (!S.boot) await load();
     const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     let html = null;
-    if (parts[0] === 'os') { html = platformPage(parts.slice(1)); if (html === undefined) html = workOsPage(parts.slice(1)); if (html === undefined) html = osPage(parts.slice(1)); }
-    else if (parts[0] === 'gpt') html = parts[1] === 'flows' && S.boot.canUseGpt ? flowsPage(parts.slice(2)) : parts[1] === 'tasks' && S.boot.canUseGpt ? tasksPage() : (parts[1] === 'library' || parts[1] === 'saved') && S.boot.canUseGpt ? libraryPage(parts[2]) : (parts[1] === 'routines' || parts[1] === 'automations') && S.boot.canUseGpt ? routinesPage() : parts[1] === 'notes' && S.boot.canUseGpt ? libraryPage('notes') : parts[1] === 'settings' && parts[2] !== 'all' && S.boot.canUseGpt ? settingsSimple() : parts[1] === 'admin' && parts[2] !== 'all' && S.boot.canUseGpt ? adminSimple() : S.boot.canUseGpt && { workspace: () => workspacePage(parts.slice(2)), notes: notesPage, automations: automationsPage, calendar: calendarPage, playground: () => playgroundPage(parts[2]), admin: () => adminPage(parts.slice(2)), settings: () => settingsPage(parts[2]) }[parts[1]] ? { workspace: () => workspacePage(parts.slice(2)), notes: notesPage, automations: automationsPage, calendar: calendarPage, playground: () => playgroundPage(parts[2]), admin: () => adminPage(parts.slice(3)), settings: () => settingsPage(parts[3]) }[parts[1]]() : gptPage(parts.slice(1));
+    if (parts[0] === 'os') { html = edgeOsPage(parts.slice(1)); if (html === undefined) html = platformPage(parts.slice(1)); if (html === undefined) html = workOsPage(parts.slice(1)); if (html === undefined) html = osPage(parts.slice(1)); }
+    else if (parts[0] === 'gpt') html = parts[1] === 'flows' && S.boot.canUseGpt ? flowsPage(parts.slice(2)) : parts[1] === 'tasks' && S.boot.canUseGpt ? tasksPage() : (parts[1] === 'library' || parts[1] === 'saved') && S.boot.canUseGpt ? libraryPage(parts[2]) : (parts[1] === 'routines' || parts[1] === 'automations') && S.boot.canUseGpt ? routinesPage() : parts[1] === 'notes' && S.boot.canUseGpt ? libraryPage('notes') : parts[1] === 'settings' && parts[2] === 'api' && S.boot.canUseGpt ? apiPage() : parts[1] === 'settings' && parts[2] !== 'all' && S.boot.canUseGpt ? settingsSimple() : parts[1] === 'admin' && parts[2] !== 'all' && S.boot.canUseGpt ? adminSimple() : S.boot.canUseGpt && { workspace: () => workspacePage(parts.slice(2)), notes: notesPage, automations: automationsPage, calendar: calendarPage, playground: () => playgroundPage(parts[2]), admin: () => adminPage(parts.slice(2)), settings: () => settingsPage(parts[2]) }[parts[1]] ? { workspace: () => workspacePage(parts.slice(2)), notes: notesPage, automations: automationsPage, calendar: calendarPage, playground: () => playgroundPage(parts[2]), admin: () => adminPage(parts.slice(3)), settings: () => settingsPage(parts[3]) }[parts[1]]() : gptPage(parts.slice(1));
+    if (parts[0] === 'os') html = edgeDecorate(parts.slice(1), html);
     if (html === null) { location.replace(parts[0] === 'os' && !S.boot.admin ? '#/gpt' : home()); return; }
     const sc = $('#scroll'), keep = hash === lastHash && sc ? sc.scrollTop : 0;
     const moved = hash !== lastHash;
@@ -45,7 +47,7 @@ async function render() {
   finally { busy = false; if (again) { again = false; render(); } }
 }
 setRenderer(render);
-addEventListener('hashchange', () => { accounts = S.userId ? accounts : null; osRouteChanged(); gptRouteChanged(); platformRouteChanged(); flowsRouteChanged(); workRouteChanged(); moreRouteChanged(); parityRouteChanged(); simpleRouteChanged(); render();
+addEventListener('hashchange', () => { accounts = S.userId ? accounts : null; osRouteChanged(); gptRouteChanged(); platformRouteChanged(); flowsRouteChanged(); workRouteChanged(); moreRouteChanged(); parityRouteChanged(); simpleRouteChanged(); edgeRouteChanged(); render();
   // keep shared state fresh as people move between pages
   if (S.userId && S.boot) { const was = JSON.stringify(S.boot); load().then(() => { if (JSON.stringify(S.boot) !== was && !document.querySelector('.overlay')) render(); }).catch(() => {}); }
 });
